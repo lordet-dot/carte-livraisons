@@ -1,0 +1,693 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Carte des livraisons – AEB Bourges</title>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<style>
+  :root {
+    --liv: #1a73e8; --liv-soft: #e8f0fe;
+    --rec: #e8710a; --rec-soft: #fef1e6;
+    --ink: #202124; --muted: #5f6368; --line: #e3e6ea; --bg: #f6f7f9; --panel: #fff;
+    --ok: #188038; --warn: #b06000; --err: #c5221f;
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; }
+  body { font: 14px/1.4 system-ui, -apple-system, "Segoe UI", Roboto, Arial, sans-serif; color: var(--ink); background: var(--bg); display: flex; flex-direction: column; }
+
+  header { display: flex; align-items: center; gap: 12px; padding: 10px 16px; background: var(--panel); border-bottom: 1px solid var(--line); flex-wrap: wrap; z-index: 2; }
+  header h1 { font-size: 16px; margin: 0 8px 0 0; font-weight: 650; white-space: nowrap; }
+  header h1 span { color: var(--muted); font-weight: 500; }
+  .daynav { display: flex; align-items: center; gap: 4px; }
+  .daynav select { font: inherit; font-weight: 600; padding: 6px 8px; border: 1px solid var(--line); border-radius: 8px; background: #fff; min-width: 230px; }
+  button { font: inherit; border: 1px solid var(--line); background: #fff; color: var(--ink); border-radius: 8px; padding: 6px 12px; cursor: pointer; }
+  button:hover { background: #f1f3f4; }
+  button.primary { background: var(--liv); border-color: var(--liv); color: #fff; font-weight: 600; }
+  button.primary:hover { background: #1765cc; }
+  button.icon { padding: 6px 10px; }
+  .grow { flex: 1; }
+  #fileinfo { color: var(--muted); font-size: 12.5px; }
+  #fileinfo b { color: var(--ink); font-weight: 600; }
+
+  main { flex: 1; display: flex; min-height: 0; }
+  aside { width: 380px; max-width: 45vw; background: var(--panel); border-right: 1px solid var(--line); display: flex; flex-direction: column; min-height: 0; }
+  .filters { display: flex; gap: 8px; padding: 10px 12px; border-bottom: 1px solid var(--line); flex-wrap: wrap; }
+  .chip { display: inline-flex; align-items: center; gap: 6px; padding: 4px 10px; border-radius: 999px; border: 1px solid var(--line); cursor: pointer; user-select: none; font-size: 13px; }
+  .chip input { display: none; }
+  .chip .dot { width: 10px; height: 10px; border-radius: 50%; }
+  .chip.off { opacity: .45; }
+  #list { overflow: auto; flex: 1; padding: 4px 0 16px; }
+  .section { padding: 12px 14px 4px; font-size: 12px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; color: var(--muted); display: flex; justify-content: space-between; }
+  .item { display: flex; gap: 10px; padding: 9px 14px; border-bottom: 1px solid #f1f3f4; cursor: pointer; }
+  .item:hover, .item.active { background: #f8f9fa; }
+  .badge { flex: none; width: 26px; height: 26px; border-radius: 50%; color: #fff; font-weight: 700; font-size: 12px; display: grid; place-items: center; margin-top: 1px; }
+  .item.liv .badge { background: var(--liv); } .item.rec .badge { background: var(--rec); }
+  .item .body { flex: 1; min-width: 0; }
+  .item .l1 { display: flex; gap: 8px; align-items: baseline; }
+  .item .client { font-weight: 650; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .item .time { color: var(--muted); font-size: 12.5px; white-space: nowrap; margin-left: auto; }
+  .item .addr { color: var(--ink); font-size: 13px; }
+  .item .meta { color: var(--muted); font-size: 12.5px; }
+  .geo { font-size: 12px; margin-top: 3px; }
+  .geo.ok { color: var(--ok); } .geo.approx { color: var(--warn); } .geo.err { color: var(--err); } .geo.wait { color: var(--muted); }
+  .geo button { font-size: 12px; padding: 2px 8px; margin-left: 6px; }
+  .item.treated { opacity: .55; }
+  .item.treated .badge { background: #9aa0a6 !important; }
+  .tag { display: inline-block; font-size: 11.5px; font-weight: 600; border-radius: 4px; padding: 1px 7px; margin-top: 4px; }
+  .tag.fait { background: #fff4b8; color: #6b5800; } .tag.annule { background: #d6f1fb; color: #035a75; }
+  .pin.treated { background: #9aa0a6; }
+
+  #mapwrap { flex: 1; position: relative; }
+  #map { position: absolute; inset: 0; }
+  .banner { position: absolute; z-index: 500; left: 50%; transform: translateX(-50%); top: 12px; background: #202124; color: #fff; padding: 8px 14px; border-radius: 8px; font-size: 13px; box-shadow: 0 2px 8px rgba(0,0,0,.25); display: none; }
+  .banner button { margin-left: 10px; padding: 2px 10px; }
+
+  #welcome { position: absolute; inset: 0; z-index: 600; background: rgba(246,247,249,.96); display: grid; place-items: center; }
+  #welcome .card { background: #fff; border: 1px solid var(--line); border-radius: 14px; padding: 28px 32px; max-width: 520px; box-shadow: 0 6px 24px rgba(0,0,0,.08); text-align: center; }
+  #welcome h2 { margin: 0 0 8px; font-size: 20px; }
+  #welcome p { color: var(--muted); margin: 6px 0 16px; }
+  #drop { margin-top: 14px; border: 2px dashed #c4c9d0; border-radius: 10px; padding: 18px; color: var(--muted); }
+  #drop.over { border-color: var(--liv); background: var(--liv-soft); color: var(--liv); }
+  .hint { font-size: 12px; color: var(--muted); margin-top: 12px; }
+
+  .pin { width: 30px; height: 30px; border-radius: 50% 50% 50% 0; transform: rotate(-45deg); display: grid; place-items: center; border: 2px solid #fff; box-shadow: 0 1px 4px rgba(0,0,0,.35); }
+  .pin span { transform: rotate(45deg); color: #fff; font-weight: 700; font-size: 12px; }
+  .pin.liv { background: var(--liv); } .pin.rec { background: var(--rec); }
+  .pin.approx { opacity: .75; border-style: dashed; }
+  .pin.d2 { background: #fff !important; border-width: 3px; }
+  .pin.d2.liv { border-color: var(--liv); } .pin.d2.rec { border-color: var(--rec); } .pin.d2.treated { border-color: #9aa0a6; }
+  .pin.d2.liv span { color: var(--liv); } .pin.d2.rec span { color: var(--rec); } .pin.d2.treated span { color: #9aa0a6; }
+  .item.d2 .badge { background: #fff !important; border: 2.5px solid; }
+  .item.liv.d2 .badge { border-color: var(--liv); color: var(--liv); } .item.rec.d2 .badge { border-color: var(--rec); color: var(--rec); }
+  .item.treated.d2 .badge { border-color: #9aa0a6; color: #9aa0a6; }
+  .daytitle { padding: 12px 14px 0; font-weight: 700; font-size: 14px; display: flex; align-items: center; gap: 8px; }
+  .daytitle .mk { width: 14px; height: 14px; border-radius: 50%; background: #5f6368; }
+  .daytitle .mk.d2 { background: #fff; border: 2.5px solid #5f6368; }
+  #day2 { border-style: dashed; margin-left: 6px; color: var(--muted); white-space: nowrap; }
+  #day2.on { border-style: solid; border-color: var(--ink); color: var(--ink); font-weight: 600; background: #f1f3f4; }
+  .leaflet-popup-content { font-size: 13px; line-height: 1.45; margin: 12px 14px; }
+  .pop-t { font-weight: 700; font-size: 14px; }
+  .pop-k { display: inline-block; font-size: 11px; font-weight: 700; color: #fff; border-radius: 4px; padding: 1px 6px; margin-bottom: 4px; }
+  .pop a { color: var(--liv); }
+  .legend { background: #fff; padding: 6px 10px; border-radius: 8px; box-shadow: 0 1px 4px rgba(0,0,0,.2); font-size: 12.5px; }
+  .legend i { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin: 0 5px 0 0; vertical-align: -1px; }
+  .empty { padding: 10px 14px; color: var(--muted); font-size: 13px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Carte du jour <span>· AEB Bourges</span></h1>
+  <div class="daynav">
+    <button class="icon" id="prev" title="Jour précédent">‹</button>
+    <select id="day" title="Jour du planning"></select>
+    <button class="icon" id="next" title="Jour suivant">›</button>
+    <button id="today">Aujourd'hui</button>
+    <button id="day2" title="Afficher aussi le jour suivant du planning sur la carte">+ Lendemain</button>
+  </div>
+  <div class="grow"></div>
+  <span id="fileinfo">Aucun planning chargé</span>
+  <button class="primary" id="reload" title="Relire le planning (après l'avoir enregistré dans Excel)">↻ Relire le planning</button>
+  <button id="choose" title="Choisir un autre dossier de planning">Changer de dossier</button>
+  <input type="file" id="fileinput" accept=".xlsx,.xlsm" hidden>
+</header>
+<main>
+  <aside>
+    <div class="filters">
+      <label class="chip" id="f-liv"><input type="checkbox" checked><span class="dot" style="background:var(--liv)"></span>Livraisons <b id="n-liv">0</b></label>
+      <label class="chip" id="f-rec"><input type="checkbox" checked><span class="dot" style="background:var(--rec)"></span>Récupérations <b id="n-rec">0</b></label>
+      <label class="chip off" id="f-done" title="Lignes en jaune (déjà livré / récupéré) ou en bleu (annulé) dans le planning"><input type="checkbox"><span class="dot" style="background:#9aa0a6"></span>Traités / annulés <b id="n-done">0</b></label>
+    </div>
+    <div id="list"><div class="empty">Chargez le planning pour voir les adresses du jour.</div></div>
+  </aside>
+  <div id="mapwrap">
+    <div id="map"></div>
+    <div class="banner" id="banner"></div>
+    <div id="welcome">
+      <div class="card">
+        <h2>Carte des livraisons et récupérations</h2>
+        <p id="welcome-text">La première fois sur cet ordinateur, indiquez le dossier OneDrive « Agence Bourges » qui contient le planning. La page s'en souviendra ; les positions corrigées y sont partagées avec toute l'équipe.</p>
+        <button class="primary" id="w-open">Choisir le dossier du planning…</button>
+        <div id="drop">ou glissez ici le dossier (ou le fichier Excel)</div>
+        <div class="hint">Le planning reste sur votre ordinateur. Seul le texte des adresses est envoyé au service de cartographie de l'IGN pour les placer sur la carte.</div>
+      </div>
+    </div>
+  </div>
+</main>
+
+<script>
+(() => {
+  'use strict';
+  // ---------- réglages ----------
+  const BOURGES = [47.0810, 2.3988];
+  const MAX_KM = 90;                       // au-delà, un résultat est considéré comme faux
+  const LS_GEO = 'aeb-carte-geo-v2';       // adresses déjà trouvées (auto)
+  const LS_MANUAL = 'aeb-carte-geo-manuel-v1'; // positions corrigées à la main
+  const LS_DAY = 'aeb-carte-jour';
+
+  // ---------- petits outils ----------
+  const $ = (s) => document.querySelector(s);
+  const esc = (s) => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  const clean = (s) => String(s ?? '').replace(/\s+/g, ' ').trim();
+  const norm = (s) => clean(s).toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '');
+  const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+  const store = {
+    get(k, d) { try { return JSON.parse(localStorage.getItem(k)) ?? d; } catch { return d; } },
+    set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch {} }
+  };
+  const km = (a, b) => {
+    const R = 6371, t = Math.PI / 180;
+    const dLat = (b[0] - a[0]) * t, dLon = (b[1] - a[1]) * t;
+    const h = Math.sin(dLat / 2) ** 2 + Math.cos(a[0] * t) * Math.cos(b[0] * t) * Math.sin(dLon / 2) ** 2;
+    return 2 * R * Math.asin(Math.sqrt(h));
+  };
+  const JOURS = ['dimanche', 'lundi', 'mardi', 'mercredi', 'jeudi', 'vendredi', 'samedi'];
+  const MOIS = ['janvier', 'février', 'mars', 'avril', 'mai', 'juin', 'juillet', 'août', 'septembre', 'octobre', 'novembre', 'décembre'];
+  const dayLabel = (iso) => { const d = new Date(iso + 'T12:00:00'); return `${JOURS[d.getDay()]} ${d.getDate()} ${MOIS[d.getMonth()]} ${d.getFullYear()}`.replace(/^./, c => c.toUpperCase()); };
+  const todayIso = () => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; };
+
+  // ---------- carte ----------
+  const map = L.map('map', { zoomControl: true }).setView(BOURGES, 10);
+  const ign = (layer, fmt) => `https://data.geopf.fr/wmts?SERVICE=WMTS&REQUEST=GetTile&VERSION=1.0.0&LAYER=${layer}&STYLE=normal&TILEMATRIXSET=PM&FORMAT=${fmt}&TILEMATRIX={z}&TILEROW={y}&TILECOL={x}`;
+  const layers = {
+    'Plan IGN': L.tileLayer(ign('GEOGRAPHICALGRIDSYSTEMS.PLANIGNV2', 'image/png'), { maxZoom: 19, attribution: '© IGN' }),
+    'Plan OpenStreetMap': L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19, attribution: '© OpenStreetMap' }),
+    'Satellite': L.tileLayer(ign('ORTHOIMAGERY.ORTHOPHOTOS', 'image/jpeg'), { maxZoom: 19, attribution: '© IGN' }),
+  };
+  layers['Plan IGN'].addTo(map);
+  L.control.layers(layers, null, { position: 'topright' }).addTo(map);
+  const legend = L.control({ position: 'bottomleft' });
+  legend.onAdd = () => { const d = L.DomUtil.create('div', 'legend'); d.innerHTML = '<i style="background:var(--liv)"></i>Livraison &nbsp; <i style="background:var(--rec)"></i>Récupération &nbsp; <span style="opacity:.7">pointillés = position approximative</span><span id="leg2" style="display:none"> &nbsp;·&nbsp; plein = jour choisi, contour = lendemain</span>'; return d; };
+  legend.addTo(map);
+  const markerLayer = L.layerGroup().addTo(map);
+
+  // ---------- état ----------
+  let fileHandle = null, fileName = '', fileStamp = 0, buffer = null, sheetNames = [];
+  let entries = [], markers = new Map(), placing = null;
+  const show = { liv: true, rec: true, done: false };
+  const visible = (e) => show[e.kind] && (show.done || !e.etat);
+
+  // ---------- mémoire du fichier (Chrome / Edge) ----------
+  const canPick = 'showOpenFilePicker' in window;
+  const idb = () => new Promise((res, rej) => { const r = indexedDB.open('aeb-carte', 1); r.onupgradeneeded = () => r.result.createObjectStore('kv'); r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error); });
+  async function idbGet(k) { try { const db = await idb(); return await new Promise(r => { const q = db.transaction('kv').objectStore('kv').get(k); q.onsuccess = () => r(q.result); q.onerror = () => r(null); }); } catch { return null; } }
+  async function idbSet(k, v) { try { const db = await idb(); db.transaction('kv', 'readwrite').objectStore('kv').put(v, k); } catch {} }
+
+  // Source = le DOSSIER du planning (recommandé : positions partagées) ou, à défaut, le fichier seul.
+  const canDir = 'showDirectoryPicker' in window;
+  const SHARED = 'carte_positions.json';
+  const isDir = () => fileHandle && fileHandle.kind === 'directory';
+  const permMode = () => (isDir() ? 'readwrite' : 'read');
+  async function pickFile() {
+    if (!canPick) { $('#fileinput').click(); return; }
+    try {
+      if (canDir) {
+        banner('Choisissez le dossier « Agence Bourges » (celui qui contient le planning), puis cliquez sur « Modifier » / « Autoriser ».');
+        fileHandle = await window.showDirectoryPicker({ id: 'aeb-planning', mode: 'readwrite' });
+        hideBanner();
+      } else {
+        const [h] = await window.showOpenFilePicker({ types: [{ description: 'Planning Excel', accept: { 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': ['.xlsx', '.xlsm'] } }] });
+        fileHandle = h;
+      }
+      await idbSet('planning', fileHandle); fileStamp = 0; await readHandle(true);
+    } catch (e) { hideBanner(); if (e.name !== 'AbortError') banner('Impossible d’ouvrir : ' + e.message); }
+  }
+  // trouve le planning dans le dossier : le classeur « planning … .xlsx » le plus récent
+  async function planningFile() {
+    if (!isDir()) return fileHandle.getFile();
+    let best = null;
+    for await (const [name, h] of fileHandle.entries()) {
+      if (h.kind !== 'file' || name.startsWith('~$') || !/\.xlsx$/i.test(name) || !/planning/i.test(name)) continue;
+      const f = await h.getFile();
+      if (!best || f.lastModified > best.lastModified) best = f;
+    }
+    if (!best) throw new Error('Aucun planning (.xlsx) trouvé dans ce dossier');
+    return best;
+  }
+  async function readHandle(userGesture) {
+    if (!fileHandle) return false;
+    let perm = await fileHandle.queryPermission({ mode: permMode() });
+    if (perm !== 'granted' && userGesture) perm = await fileHandle.requestPermission({ mode: permMode() });
+    if (perm !== 'granted') return false;
+    try {
+      await sharedLoad();
+      const f = await planningFile();
+      if (f.lastModified === fileStamp && buffer) return true;
+      await loadFile(f);
+      return true;
+    } catch (e) {
+      console.warn(e);
+      banner('Lecture impossible : ' + esc(e.message) + '. Choisissez à nouveau le dossier du planning.', 'Choisir', pickFile);
+      return false;
+    }
+  }
+
+  // ---------- positions partagées (fichier carte_positions.json dans le dossier, synchronisé par OneDrive) ----------
+  let sharedStamp = 0, saveTimer = null;
+  async function readShared() {
+    try { const h = await fileHandle.getFileHandle(SHARED); const f = await h.getFile(); return { data: JSON.parse(await f.text() || '{}'), stamp: f.lastModified }; }
+    catch { return { data: {}, stamp: 0 }; }
+  }
+  // fusion : pour chaque adresse, la modification la plus récente l'emporte (suppressions comprises)
+  function mergeManual(into, from) {
+    let changed = false;
+    for (const [k, v] of Object.entries(from || {})) {
+      if (!v || typeof v !== 'object') continue;
+      const cur = into[k];
+      if (!cur || (v.t || 0) > (cur.t || 0)) { into[k] = v; changed = true; }
+    }
+    return changed;
+  }
+  async function sharedLoad() {
+    if (!isDir()) return;
+    const { data, stamp } = await readShared();
+    if (stamp && stamp === sharedStamp) return;
+    sharedStamp = stamp;
+    const changed = mergeManual(manual, data.manuel);
+    for (const [k, v] of Object.entries(data.auto || {})) if (!geoCache[k] && v && v.lat) geoCache[k] = v;
+    store.set(LS_MANUAL, manual); store.set(LS_GEO, geoCache);
+    if (changed && entries.length) {
+      for (const x of entries) { const m = manualOf(keyOf(x)); if (m) { x.geo = { ...m, prec: 'manuel' }; renderItem(x); addMarker(x); } }
+    }
+  }
+  function sharedSaveSoon() { if (!isDir()) return; clearTimeout(saveTimer); saveTimer = setTimeout(sharedSave, 800); }
+  async function sharedSave() {
+    if (!isDir()) return;
+    try {
+      if (await fileHandle.queryPermission({ mode: 'readwrite' }) !== 'granted') return;
+      const { data } = await readShared();          // relit d'abord pour ne pas écraser les corrections des autres
+      const man = data.manuel || {}; mergeManual(man, manual); mergeManual(manual, man); store.set(LS_MANUAL, manual);
+      const auto = Object.assign({}, data.auto || {}, geoCache);
+      const h = await fileHandle.getFileHandle(SHARED, { create: true });
+      const w = await h.createWritable(); await w.write(JSON.stringify({ version: 1, manuel: man, auto })); await w.close();
+      sharedStamp = (await h.getFile()).lastModified;
+    } catch (e) { console.warn('positions partagées', e); }
+  }
+
+  async function loadFile(f) {
+    buffer = await f.arrayBuffer(); fileName = f.name; fileStamp = f.lastModified;
+    const wb = XLSX.read(buffer, { type: 'array', bookSheets: true });
+    sheetNames = wb.SheetNames.filter(n => /^\d{4}-\d{2}-\d{2}$/.test(n)).sort();
+    if (!sheetNames.length) { banner('Ce fichier ne contient pas de feuilles de jour (AAAA-MM-JJ).'); return; }
+    fillDays();
+    $('#welcome').style.display = 'none';
+    const t = new Date(fileStamp);
+    $('#fileinfo').innerHTML = `<b>${esc(fileName)}</b> · enregistré à ${String(t.getHours()).padStart(2, '0')}h${String(t.getMinutes()).padStart(2, '0')}`;
+    await showDay($('#day').value);
+  }
+
+  // ---------- jours ----------
+  function fillDays() {
+    const want = (location.hash.slice(1).match(/^\d{4}-\d{2}-\d{2}$/) || [])[0] || $('#day').value || todayIso();
+    $('#day').innerHTML = sheetNames.map(n => `<option value="${n}">${dayLabel(n)}</option>`).join('');
+    $('#day').value = sheetNames.find(n => n >= want) || sheetNames[sheetNames.length - 1];
+  }
+  function stepDay(d) { const i = sheetNames.indexOf($('#day').value) + d; if (i >= 0 && i < sheetNames.length) { $('#day').value = sheetNames[i]; showDay(sheetNames[i]); } }
+
+  // ---------- lecture d'une feuille de jour ----------
+  function readDay(name) {
+    const wb = XLSX.read(buffer, { type: 'array', sheets: [name], cellDates: true, dateNF: 'dd/mm/yyyy', cellStyles: true });
+    const ws = wb.Sheets[name];
+    const rows = XLSX.utils.sheet_to_json(ws, { header: 1, raw: false, defval: '', blankrows: true });
+    const cell = (r, c) => clean((rows[r] || [])[c]);
+    const C = (s) => XLSX.utils.decode_col(s);
+    // couleur de fond posée à la main sur une cellule (bleu = annulé, jaune = déjà traité)
+    const fill = (r, c) => { const x = ws[XLSX.utils.encode_cell({ r, c })]; const f = x && x.s && x.s.fgColor; return f && f.rgb ? String(f.rgb).slice(-6).toUpperCase() : ''; };
+    const BLUE = '00B0F0', YELLOW = 'FFFF00';
+    // ✔ = « a » → annulé (bleu) ; toute autre marque (x…) → déjà livré / récupéré (jaune)
+    const status = (chk, r, cols) => {
+      const k = norm(chk);
+      if (k === 'a') return 'annule';
+      if (k) return 'fait';
+      const f = cols.map(c => fill(r, c));
+      if (f.includes(BLUE)) return 'annule';
+      if (f.includes(YELLOW)) return 'fait';
+      return '';
+    };
+    const out = [];
+
+    // repère les en-têtes (leur ligne varie selon les jours)
+    let hL = -1, hR = -1, endL = rows.length, endR = rows.length;
+    for (let r = 0; r < rows.length; r++) {
+      if (hL < 0 && /^CHANTIER$/i.test(cell(r, C('M'))) && /CLIENT/i.test(cell(r, C('G')))) hL = r;
+      if (hR < 0 && /^MOTIF$/i.test(cell(r, C('R')))) hR = r;
+      if (/^RECUPERATION\s*:/i.test(cell(r, C('B')))) endL = Math.min(endL, r);
+      if (/^OBSERVATIONS/i.test(cell(r, C('R')))) endR = Math.min(endR, r);
+    }
+
+    // Livraisons : B ✔ · C heure · G client · J tél · K matériel · L parc · M chantier · N livreur
+    if (hL >= 0) {
+      let cur = null, prevRow = -9;
+      for (let r = hL + 1; r < endL; r++) {
+        const v = { chk: cell(r, 1), heure: cell(r, 2), client: cell(r, 6), tel: cell(r, 9), mat: cell(r, 10), parc: cell(r, 11), chantier: cell(r, 12), livreur: cell(r, 13) };
+        if (!v.heure && !v.client && !v.mat && !v.chantier) { prevRow = -9; continue; }
+        const continuation = !v.heure && !v.client && cur && prevRow === r - 1;
+        if (continuation) {
+          if (v.chantier) cur.chantier = clean(cur.chantier + ' ' + v.chantier);
+          if (v.mat) cur.mat = clean(cur.mat + (cur.mat ? ' + ' : '') + v.mat);
+          if (v.tel && !cur.tel) cur.tel = v.tel;
+          if (v.livreur && !cur.livreur) cur.livreur = v.livreur;
+        } else {
+          cur = { kind: 'liv', ...v, row: r + 1, etat: status(v.chk, r, [1, 6, 12]) }; out.push(cur);
+        }
+        prevRow = r;
+      }
+    }
+    // Récupérations : Q ✔ · R motif · S heure · T date · V client · W matériel · Y chantier · AA commentaire · AB livreur
+    if (hR >= 0) {
+      let cur = null, prevRow = -9;
+      for (let r = hR + 1; r < endR; r++) {
+        const v = { chk: cell(r, 16), motif: cell(r, 17), heure: cell(r, 18), date: cell(r, 19), client: cell(r, 21), mat: cell(r, 22), chantier: cell(r, 24), com: cell(r, 26), livreur: cell(r, 27) };
+        if (!v.client && !v.mat && !v.chantier) { prevRow = -9; continue; }
+        const continuation = !v.heure && !v.client && !v.motif && cur && prevRow === r - 1;
+        if (continuation) {
+          if (v.chantier) cur.chantier = clean(cur.chantier + ' ' + v.chantier);
+          if (v.mat) cur.mat = clean(cur.mat + ' + ' + v.mat);
+          if (v.com) cur.com = clean(cur.com + ' ' + v.com);
+        } else {
+          cur = { kind: 'rec', ...v, row: r + 1, etat: status(v.chk, r, [16, 21, 24]) }; out.push(cur);
+        }
+        prevRow = r;
+      }
+    }
+    // tri par heure (texte libre : 08H00, 8h, AM, MATIN…)
+    const hourKey = (h) => { const m = norm(h).match(/(\d{1,2})\s*h?\s*(\d{2})?/); if (m) return +m[1] * 60 + (+m[2] || 0); if (/matin/.test(norm(h))) return 8 * 60; if (/^am|apres|aprem/.test(norm(h))) return 14 * 60; return 24 * 60; };
+    for (const e of out) e.sort = hourKey(e.heure);
+    return out;
+  }
+
+  // ---------- géocodage (IGN Géoplateforme, puis OpenStreetMap) ----------
+  const geoCache = store.get(LS_GEO, {});
+  const manual = store.get(LS_MANUAL, {});
+  const manualOf = (k) => (manual[k] && !manual[k].del ? manual[k] : null);
+  const NOISE = /\b(devant|derriere|chantier|point gps|gps|par|face|a cote de|cote|pres de|zone|bat(iment)?\s*\d*|bat\.?|portail|entree|acces|sortie)\b/gi;
+  const STREET = /\b(rue|route|rte|chemin|ch|avenue|av|boulevard|bd|allee|impasse|imp|place|pl|lieu[- ]dit|quai|cours|square|rond[- ]point)\b/i;
+  // mots trop courants pour dire si un résultat correspond à la demande
+  const GENERIC = new Set('rue route rte chemin avenue boulevard allee impasse place quai cours square saint sainte les des du de la le aux sur sous en et zone za zi bourges cher france industrie industriel industrielle parc poste'.split(' '));
+  const NUMW = { 2: 'deux', 3: 'trois', 4: 'quatre', 5: 'cinq', 6: 'six', 7: 'sept', 8: 'huit', 9: 'neuf', 10: 'dix' };
+  const tokens = (s) => norm(s).replace(/[^a-z0-9 ]/g, ' ').split(' ').filter(w => w.length >= 3 && !/^\d+$/.test(w) && !GENERIC.has(w));
+  const expand = (s) => clean(s.replace(/\bst\b/gi, 'saint').replace(/\bste\b/gi, 'sainte').replace(/\bch\b/gi, 'chemin').replace(/\brte\b/gi, 'route').replace(/\bav\b/gi, 'avenue').replace(/\bbd\b/gi, 'boulevard').replace(/\bimp\b/gi, 'impasse').replace(/\b(za|zi|zac)\b/gi, ''));
+
+  function variants(t) {
+    const base = clean(t.replace(/[\/;,]+/g, ' ').replace(/\s-\s/g, ' '));
+    const stripped = expand(base.replace(NOISE, ' '));
+    const v = [stripped];
+    // « RTI INDUSTRIE VASSELAY 22 ROUTE DU CRETON » → « 22 route du creton vasselay »
+    const m = stripped.match(/\b(\d+\s*(bis|ter)?\s+)?(rue|route|chemin|avenue|boulevard|allee|impasse|place|lieu[- ]dit|quai|cours|square)\b.*/i);
+    if (m) {
+      const tail = m[0], before = stripped.slice(0, m.index).trim().split(' ').filter(Boolean);
+      if (before.length) v.push(clean(tail + ' ' + before[before.length - 1]));
+      v.push(tail);
+      const words = tail.replace(/\bdes (\d+)\b/gi, (x, n) => NUMW[n] ? 'des ' + NUMW[n] : x);
+      if (words !== tail) v.push(words + (before.length ? ' ' + before[before.length - 1] : ''));
+    }
+    if (base !== stripped) v.push(base);
+    return [...new Set(v.filter(Boolean))];
+  }
+  async function geopf(q, index) {
+    const u = `https://data.geopf.fr/geocodage/search?q=${encodeURIComponent(q.slice(0, 190))}&index=${index}&limit=7&lat=${BOURGES[0]}&lon=${BOURGES[1]}`;
+    const r = await fetch(u); if (!r.ok) throw new Error('IGN ' + r.status);
+    const j = await r.json();
+    return (j.features || []).map(f => {
+      const p = f.properties || {}; const [lon, lat] = f.geometry.coordinates;
+      const arr = (x) => [].concat(x ?? []).filter(Boolean);
+      if (index === 'poi') {
+        const names = [...arr(p.toponym), ...arr(p.name)];
+        const label = clean([names[0], arr(p.city)[0]].filter(Boolean).join(', '));
+        return { lat, lon, score: p.score ?? p._score ?? 0, type: 'poi', label, match: [...names, ...arr(p.city), ...arr(p.category)].join(' ') };
+      }
+      return { lat, lon, score: p.score ?? p._score ?? 0, type: p.type || '', label: p.label, match: [p.label, p.name, p.street, p.city].filter(Boolean).join(' ') };
+    });
+  }
+  async function nominatim(q) {
+    const u = `https://nominatim.openstreetmap.org/search?format=jsonv2&limit=5&countrycodes=fr&viewbox=1.4,47.75,3.2,46.4&bounded=1&q=${encodeURIComponent(q)}`;
+    const r = await fetch(u, { headers: { 'Accept-Language': 'fr' } }); if (!r.ok) throw new Error('OSM ' + r.status);
+    return (await r.json()).map(x => ({ lat: +x.lat, lon: +x.lon, score: 0.6, type: ['house', 'building'].includes(x.addresstype) ? 'housenumber' : ['road'].includes(x.addresstype) ? 'street' : ['city', 'town', 'village', 'municipality', 'hamlet'].includes(x.addresstype) ? 'municipality' : 'poi', label: x.display_name.split(',').slice(0, 3).join(','), match: x.display_name }));
+  }
+  const PREC = { housenumber: 3, poi: 3, street: 2, locality: 2, municipality: 1, city: 1, town: 1, village: 1 };
+
+  // part des mots importants de la demande qu'on retrouve dans le résultat
+  function overlap(qTok, cand) {
+    if (!qTok.length) return 0;
+    const ct = tokens(cand.match || cand.label);
+    const hit = (w) => ct.some(c => c === w || (w.length >= 5 && c.length >= 5 && (c.startsWith(w.slice(0, 5)) || w.startsWith(c.slice(0, 5)))));
+    return qTok.filter(hit).length / qTok.length;
+  }
+  function rate(text, cand) {
+    if (km(BOURGES, [cand.lat, cand.lon]) > MAX_KM) return -1;
+    const isStreet = STREET.test(text);
+    const ov = overlap(tokens(text.replace(NOISE, ' ')), cand);
+    const prec = PREC[cand.type] || 1;
+    const need = cand.type === 'poi' ? (isStreet ? 0.75 : 0.5) : prec >= 2 ? 0.4 : 0.3;
+    if (ov < need) return -1;
+    return ov * 2 + prec * 0.35 + (cand.score || 0) * 0.5 + (isStreet && cand.type !== 'poi' && prec >= 2 ? 0.4 : 0);
+  }
+  // recherches déjà en cours (une même adresse présente deux fois n'est cherchée qu'une fois)
+  const pending = new Map();
+  const LS_MISS = 'aeb-carte-geo-introuvable-v1';
+  const misses = store.get(LS_MISS, {});           // adresses introuvables : on ne réessaie qu'après 7 jours
+  let osmChain = Promise.resolve();                // OpenStreetMap : 1 requête par seconde maximum
+  const osm = (q) => { const p = osmChain.then(() => nominatim(q)); osmChain = p.catch(() => {}).then(() => sleep(1000)); return p; };
+
+  function geocode(text) {
+    const key = norm(text);
+    if (!key) return Promise.resolve(null);
+    if (manualOf(key)) return Promise.resolve({ ...manualOf(key), prec: 'manuel' });
+    if (geoCache[key]) return Promise.resolve(geoCache[key]);
+    if (misses[key] && Date.now() - misses[key] < 7 * 864e5) return Promise.resolve(null);
+    if (!pending.has(key)) pending.set(key, doGeocode(text, key).finally(() => pending.delete(key)));
+    return pending.get(key);
+  }
+  async function doGeocode(text, key) {
+    let found = null, bestScore = -1;
+    const consider = (list) => { for (const c of list) { const r = rate(text, c); if (r > bestScore) { bestScore = r; found = c; } } };
+    const good = () => found && (PREC[found.type] || 1) >= 2 && bestScore >= 2.6;
+    // toutes les variantes, adresses et lieux, en même temps
+    const jobs = [];
+    for (const q of variants(text)) for (const idx of ['address', 'poi']) jobs.push(geopf(q, idx));
+    const res1 = await Promise.allSettled(jobs);
+    let netOk = false;
+    for (const r of res1) if (r.status === 'fulfilled') { netOk = true; consider(r.value); }
+    const pack = (f) => ({ lat: f.lat, lon: f.lon, label: f.label, prec: (PREC[f.type] || 1) >= 2 ? 'ok' : 'approx' });
+    if (!good()) {
+      // complément OpenStreetMap en arrière-plan : on affiche déjà ce qu'on a, la carte se corrige ensuite
+      const before = found;
+      osm(variants(text)[0]).then(list => {
+        consider(list);
+        if (found && found !== before) { const r = pack(found); geoCache[key] = r; store.set(LS_GEO, geoCache); delete misses[key]; store.set(LS_MISS, misses); refreshKey(key, r); }
+        else if (!found) { misses[key] = Date.now(); store.set(LS_MISS, misses); }
+      }).catch(e => { console.warn(e); if (!found && netOk) { misses[key] = Date.now(); store.set(LS_MISS, misses); } });
+    }
+    if (!found) return null;
+    const res = pack(found);
+    geoCache[key] = res; store.set(LS_GEO, geoCache);
+    return res;
+  }
+
+  // ---------- affichage ----------
+  let showToken = 0, days = [], withNext = false;
+  async function showDay(name) {
+    if (!buffer || !name) return;
+    const token = ++showToken;
+    store.set(LS_DAY, name); history.replaceState(null, '', '#' + name);
+    // lendemain = feuille de jour suivante du planning (le lundi après un vendredi)
+    const name2 = withNext ? (sheetNames[sheetNames.indexOf(name) + 1] || '') : '';
+    $('#day2').classList.toggle('on', !!name2);
+    $('#day2').textContent = name2 ? `✓ + ${dayLabel(name2).split(' ').slice(0, 2).join(' ')}` : '+ Lendemain';
+    const L2 = document.getElementById('leg2'); if (L2) L2.style.display = name2 ? '' : 'none';
+    days = name2 ? [name, name2] : [name];
+    entries = [];
+    days.forEach((dn, k) => {
+      const list = readDay(dn);
+      list.sort((a, b) => (a.kind === b.kind ? a.sort - b.sort : a.kind === 'liv' ? -1 : 1));
+      let i = 0, j = 0;   // numéros d'abord pour ce qui reste à faire, puis pour les lignes traitées
+      for (const pass of [false, true]) for (const e of list) if (!!e.etat === pass) e.num = e.kind === 'liv' ? ++i : ++j;
+      for (const e of list) { e.day = dn; e.d = k + 1; }
+      entries.push(...list);
+    });
+    $('#n-liv').textContent = entries.filter(e => e.kind === 'liv' && !e.etat).length;
+    $('#n-rec').textContent = entries.filter(e => e.kind === 'rec' && !e.etat).length;
+    $('#n-done').textContent = entries.filter(e => e.etat).length;
+    for (const e of entries) { const k = keyOf(e); e.geo = !e.chantier && manualOf(k) ? { ...manualOf(k), prec: 'manuel' } : e.chantier ? undefined : null; }
+    renderList(); renderMarkers(true);
+    await geocodeVisible(token);
+  }
+  // géocodage progressif, seulement pour ce qui est affiché
+  async function geocodeVisible(token = showToken) {
+    const todo = entries.filter(e => e.chantier && e.geo === undefined && visible(e) && !e.busy);
+    let n = 0;
+    const worker = async () => {
+      while (todo.length) {
+        const e = todo.shift(); e.busy = true;
+        const g = await geocode(e.chantier); e.busy = false;
+        if (token !== showToken) return;
+        e.geo = g; renderItem(e); addMarker(e);
+        if (++n % 4 === 0) fitAll();
+      }
+    };
+    await Promise.all(Array.from({ length: 6 }, worker));   // 6 adresses cherchées en parallèle
+    if (token === showToken) { fitAll(); sharedSaveSoon(); }
+  }
+
+  const keyOf = (e) => norm(e.chantier) || (e.client ? 'client:' + norm(e.client) : '');
+  const idOf = (e) => `${e.d}-${e.kind}-${e.num}`;
+  function geoLine(e) {
+    if (!e.chantier && !e.geo) return `<div class="geo err">Pas d’adresse dans la colonne CHANTIER<button data-place="${idOf(e)}">Placer sur la carte</button></div>`;
+    if (e.geo === undefined) return '<div class="geo wait">Recherche sur la carte…</div>';
+    if (e.geo === null) return `<div class="geo err">Adresse introuvable<button data-place="${idOf(e)}">Placer sur la carte</button></div>`;
+    if (e.geo.prec === 'manuel') return `<div class="geo ok">✓ Position placée à la main<button data-place="${idOf(e)}">Déplacer</button><button data-reset="${idOf(e)}" title="Oublier la position placée à la main et rechercher l’adresse à nouveau">Position auto</button></div>`;
+    if (e.geo.prec === 'approx') return `<div class="geo approx">≈ ${esc(e.geo.label)} (commune seulement)<button data-place="${idOf(e)}">Corriger</button></div>`;
+    return `<div class="geo ok">✓ ${esc(e.geo.label)}<button data-place="${idOf(e)}">Déplacer</button></div>`;
+  }
+  function itemHtml(e) {
+    const meta = [e.mat, e.livreur && '🚚 ' + e.livreur, e.kind === 'rec' && e.motif && (/^d/i.test(e.motif) ? 'Dépannage' : /^r/i.test(e.motif) ? 'Récupération' : e.motif), e.kind === 'rec' && e.com].filter(Boolean).map(esc).join(' · ');
+    return `<div class="badge">${e.num}</div><div class="body">
+      <div class="l1"><span class="client">${esc(e.client || '(sans client)')}</span><span class="time">${esc(e.heure)}</span></div>
+      <div class="addr">${esc(e.chantier || '—')}</div>
+      ${meta ? `<div class="meta">${meta}</div>` : ''}${e.etat ? `<div class="tag ${e.etat}">${e.etat === 'annule' ? 'Annulé' : e.kind === 'liv' ? 'Déjà livré' : 'Déjà récupéré'}</div>` : geoLine(e)}</div>`;
+  }
+  function renderList() {
+    let h = '';
+    for (const [k, dn] of days.entries()) {
+      const mine = entries.filter(e => e.day === dn);
+      const L1 = mine.filter(e => e.kind === 'liv' && visible(e)), R1 = mine.filter(e => e.kind === 'rec' && visible(e));
+      if (days.length > 1) h += `<div class="daytitle"><span class="mk ${k ? 'd2' : ''}"></span>${dayLabel(dn)}</div>`;
+      const row = (e) => `<div class="item ${e.kind} ${e.etat ? 'treated' : ''} ${e.d === 2 ? 'd2' : ''}" id="it-${idOf(e)}">${itemHtml(e)}</div>`;
+      const hidden = (k) => mine.filter(e => e.kind === k && e.etat).length;
+      const none = (k, txt) => { const n = show.done ? 0 : hidden(k); return `<div class="empty">${txt}${n ? ` — ${n} déjà traitée${n > 1 ? 's' : ''} ou annulée${n > 1 ? 's' : ''}, masquée${n > 1 ? 's' : ''} (pastille « Traités / annulés » pour les voir)` : ''}.</div>`; };
+      if (show.liv) h += `<div class="section"><span>Livraisons</span><span>${L1.length}</span></div>` + (L1.length ? '' : none('liv', 'Plus aucune livraison à faire ce jour')) + L1.map(row).join('');
+      if (show.rec) h += `<div class="section"><span>Récupérations / dépannages</span><span>${R1.length}</span></div>` + (R1.length ? '' : none('rec', 'Plus aucune récupération à faire ce jour')) + R1.map(row).join('');
+    }
+    $('#list').innerHTML = h;
+  }
+  function renderItem(e) { const el = document.getElementById(`it-${idOf(e)}`); if (el) el.innerHTML = itemHtml(e); }
+
+  function popupHtml(e) {
+    const color = e.kind === 'liv' ? 'var(--liv)' : 'var(--rec)';
+    const dest = `${e.geo.lat},${e.geo.lon}`;
+    return `<div class="pop"><span class="pop-k" style="background:${color}">${e.kind === 'liv' ? 'LIVRAISON' : 'RÉCUPÉRATION'} n°${e.num}</span>${days.length > 1 ? ` <span style="color:#5f6368;font-size:12px">${dayLabel(e.day)}</span>` : ''}
+      <div class="pop-t">${esc(e.client || '(sans client)')}</div>
+      <div>${esc(e.chantier)}</div>
+      ${e.heure ? `<div>🕒 ${esc(e.heure)}</div>` : ''}${e.mat ? `<div>🔧 ${esc(e.mat)}</div>` : ''}${e.livreur ? `<div>🚚 ${esc(e.livreur)}</div>` : ''}${e.tel ? `<div>📞 ${esc(e.tel)}</div>` : ''}${e.com ? `<div>💬 ${esc(e.com)}</div>` : ''}
+      <div style="margin-top:8px;display:flex;gap:8px;align-items:center;flex-wrap:wrap"><button data-place="${idOf(e)}">📍 Déplacer ce point</button><a href="https://www.google.com/maps/dir/?api=1&destination=${dest}" target="_blank" rel="noopener">Itinéraire Google Maps ↗</a></div>
+      <div style="color:#5f6368;font-size:12px;margin-top:4px">Astuce : vous pouvez aussi faire glisser le point.</div></div>`;
+  }
+  function addMarker(e) {
+    const old = markers.get(e); if (old) markerLayer.removeLayer(old);
+    if (!e.geo) return;
+    const icon = L.divIcon({ className: '', html: `<div class="pin ${e.etat ? 'treated' : e.kind} ${e.d === 2 ? 'd2 ' + e.kind : ''} ${e.geo.prec === 'approx' ? 'approx' : ''}"><span>${e.num}</span></div>`, iconSize: [30, 30], iconAnchor: [15, 30], popupAnchor: [0, -28] });
+    const m = L.marker([e.geo.lat, e.geo.lon], { icon, draggable: true, title: e.client }).bindPopup(popupHtml(e));
+    m.on('dragend', () => { const p = m.getLatLng(); saveManual(e, p.lat, p.lng); flash('Position enregistrée. Elle sera reprise les prochaines fois.'); });
+    m.on('click', () => highlight(e));
+    markers.set(e, m);
+    if (visible(e)) m.addTo(markerLayer);
+  }
+  function renderMarkers(reset) { markerLayer.clearLayers(); if (reset) markers = new Map(); for (const e of entries) if (e.geo) addMarker(e); }
+  function fitAll() {
+    const pts = entries.filter(e => e.geo && visible(e)).map(e => [e.geo.lat, e.geo.lon]);
+    if (pts.length === 1) map.setView(pts[0], 13); else if (pts.length) map.fitBounds(pts, { padding: [40, 40], maxZoom: 13 });
+  }
+  function highlight(e) {
+    document.querySelectorAll('.item.active').forEach(x => x.classList.remove('active'));
+    const el = document.getElementById(`it-${idOf(e)}`); if (el) { el.classList.add('active'); el.scrollIntoView({ block: 'nearest', behavior: 'smooth' }); }
+  }
+  function refreshKey(key, g) {
+    for (const x of entries) if (norm(x.chantier) === key && !(x.geo && x.geo.prec === 'manuel')) { x.geo = g; renderItem(x); addMarker(x); }
+  }
+  function saveManual(e, lat, lon) {
+    const key = keyOf(e); if (!key) return;
+    manual[key] = { lat, lon, label: e.chantier || e.client, t: Date.now() }; store.set(LS_MANUAL, manual); sharedSaveSoon();
+    delete misses[key]; store.set(LS_MISS, misses);
+    for (const x of entries) if (keyOf(x) === key) { x.geo = { ...manual[key], prec: 'manuel' }; renderItem(x); addMarker(x); }
+  }
+  function resetManual(e) {
+    const key = keyOf(e); manual[key] = { del: true, t: Date.now() }; store.set(LS_MANUAL, manual); sharedSaveSoon();
+    delete geoCache[key]; store.set(LS_GEO, geoCache); delete misses[key]; store.set(LS_MISS, misses);
+    for (const x of entries) if (keyOf(x) === key) { x.geo = x.chantier ? undefined : null; renderItem(x); addMarker(x); }
+    geocodeVisible();
+  }
+  let flashTimer;
+  function flash(msg) { banner(msg); clearTimeout(flashTimer); flashTimer = setTimeout(hideBanner, 2500); }
+
+  // ---------- placement manuel ----------
+  function startPlacing(e) {
+    placing = e; map.getContainer().style.cursor = 'crosshair';
+    map.closePopup(); clearTimeout(flashTimer);
+    banner(`Cliquez sur la carte à l’emplacement de « ${esc(e.chantier || e.client)} ». La position sera retenue pour les prochaines fois.`, 'Annuler', stopPlacing);
+  }
+  function stopPlacing() { placing = null; map.getContainer().style.cursor = ''; hideBanner(); }
+  map.on('click', (ev) => { if (!placing) return; const e = placing; stopPlacing(); saveManual(e, ev.latlng.lat, ev.latlng.lng); markers.get(e)?.openPopup(); });
+
+  function banner(html, btn, fn) {
+    const b = $('#banner'); b.innerHTML = html + (btn ? ` <button>${btn}</button>` : ` <button>OK</button>`);
+    b.querySelector('button').onclick = () => { hideBanner(); fn && fn(); };
+    b.style.display = 'block';
+  }
+  function hideBanner() { $('#banner').style.display = 'none'; }
+
+  // ---------- événements ----------
+  // bouton « Déplacer ce point » dans la bulle d'un point
+  $('#map').addEventListener('click', (ev) => {
+    const pb = ev.target.closest('button[data-place]'); if (!pb) return;
+    ev.stopPropagation(); const e = entries.find(x => idOf(x) === pb.dataset.place); if (e) startPlacing(e);
+  });
+  $('#list').addEventListener('click', (ev) => {
+    const rb = ev.target.closest('button[data-reset]');
+    if (rb) { ev.stopPropagation(); const e = entries.find(x => idOf(x) === rb.dataset.reset); if (e) resetManual(e); return; }
+    const pb = ev.target.closest('button[data-place]');
+    const id = (pb ? pb.dataset.place : ev.target.closest('.item')?.id.slice(3)) || '';
+    const e = entries.find(x => idOf(x) === id); if (!e) return;
+    if (pb) { ev.stopPropagation(); startPlacing(e); return; }
+    highlight(e);
+    const m = markers.get(e); if (m) { map.setView(m.getLatLng(), Math.max(map.getZoom(), 14)); m.openPopup(); }
+  });
+  for (const k of ['liv', 'rec', 'done']) {
+    const chip = $('#f-' + k);
+    chip.querySelector('input').addEventListener('change', (ev) => { show[k] = ev.target.checked; chip.classList.toggle('off', !show[k]); renderList(); renderMarkers(false); fitAll(); geocodeVisible(); });
+  }
+  $('#day').addEventListener('change', () => showDay($('#day').value));
+  $('#day2').addEventListener('click', () => { withNext = !withNext; showDay($('#day').value); });
+  $('#prev').onclick = () => stepDay(-1);
+  $('#next').onclick = () => stepDay(1);
+  $('#today').onclick = () => { const t = sheetNames.find(n => n >= todayIso()); if (t) { $('#day').value = t; showDay(t); } };
+  $('#choose').onclick = pickFile;
+  $('#w-open').onclick = async () => { if (fileHandle && await readHandle(true)) return; pickFile(); };
+  $('#reload').onclick = async () => {
+    if (fileHandle) { fileStamp = 0; if (await readHandle(true)) return; }
+    pickFile();
+  };
+  $('#fileinput').addEventListener('change', (ev) => { const f = ev.target.files[0]; if (f) loadFile(f); ev.target.value = ''; });
+  const drop = $('#drop');
+  ['dragover', 'dragenter'].forEach(t => document.addEventListener(t, (ev) => { ev.preventDefault(); drop.classList.add('over'); }));
+  ['dragleave', 'drop'].forEach(t => document.addEventListener(t, (ev) => { ev.preventDefault(); if (t === 'drop' || ev.target === drop) drop.classList.remove('over'); }));
+  document.addEventListener('drop', async (ev) => {
+    const item = ev.dataTransfer.items && ev.dataTransfer.items[0];
+    if (item && item.getAsFileSystemHandle) { try { const h = await item.getAsFileSystemHandle(); if (h && (h.kind === 'file' || h.kind === 'directory')) { fileHandle = h; fileStamp = 0; await idbSet('planning', h); await readHandle(true); return; } } catch {} }
+    const f = ev.dataTransfer.files[0]; if (f) loadFile(f);
+  });
+  // relit tout seul quand on revient sur la page (si le planning a été enregistré entre-temps)
+  async function autoRefresh() {
+    if (document.visibilityState !== 'visible' || !fileHandle) return;
+    if (await fileHandle.queryPermission({ mode: permMode() }) !== 'granted') return;
+    try { await sharedLoad(); const f = await planningFile(); if (f.lastModified !== fileStamp) await loadFile(f); } catch {}
+  }
+  document.addEventListener('visibilitychange', autoRefresh);
+  setInterval(autoRefresh, 60000);
+  window.addEventListener('hashchange', () => { const d = location.hash.slice(1); if (sheetNames.includes(d) && d !== $('#day').value) { $('#day').value = d; showDay(d); } });
+
+  // ---------- démarrage ----------
+  (async () => {
+    if (!canPick) $('#welcome-text').textContent = 'Choisissez le planning (fichier Excel) ou glissez-le ici. Avec ce navigateur, il faudra le redonner à chaque ouverture ; avec Chrome ou Edge, la page s’en souvient.';
+    fileHandle = canPick ? await idbGet('planning') : null;
+    if (fileHandle) {
+      if (await readHandle(false)) return;
+      $('#welcome-text').textContent = `Le ${isDir() ? 'dossier' : 'planning'} « ${fileHandle.name} » est mémorisé. Cliquez pour l’ouvrir (le navigateur demande une autorisation à chaque nouvelle session).`;
+      $('#w-open').textContent = 'Ouvrir le planning';
+    }
+  })();
+})();
+</script>
+</body>
+</html>

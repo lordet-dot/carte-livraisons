@@ -59,6 +59,10 @@
   .tag { display: inline-block; font-size: 11.5px; font-weight: 600; border-radius: 4px; padding: 1px 7px; margin-top: 4px; }
   .tag.fait { background: #fff4b8; color: #6b5800; } .tag.annule { background: #d6f1fb; color: #035a75; }
   .pin.treated { background: #9aa0a6; }
+  .pin.red { background: #d31b32 !important; border-color: #fff !important; }
+  .pin.red span { color: #fff !important; }
+  .agence-pin { background: #d31b32; color: #fff; font: 700 12px/26px Georgia, serif; text-align: center; border-radius: 6px; border: 2px solid #fff; box-shadow: 0 1px 5px rgba(0,0,0,.4); width: 44px; height: 26px; }
+  .geo.red { color: #d31b32; }
 
   #mapwrap { flex: 1; position: relative; }
   #map { position: absolute; inset: 0; }
@@ -179,9 +183,21 @@
   layers['Plan IGN'].addTo(map);
   L.control.layers(layers, null, { position: 'topright' }).addTo(map);
   const legend = L.control({ position: 'bottomleft' });
-  legend.onAdd = () => { const d = L.DomUtil.create('div', 'legend'); d.innerHTML = '<i style="background:var(--liv)"></i>Livraison &nbsp; <i style="background:var(--rec)"></i>Récupération &nbsp; <span style="opacity:.7">pointillés = position approximative</span><span id="leg2" style="display:none"> &nbsp;·&nbsp; plein = jour choisi, contour = lendemain</span>'; return d; };
+  legend.onAdd = () => { const d = L.DomUtil.create('div', 'legend'); d.innerHTML = '<i style="background:var(--liv)"></i>Livraison &nbsp; <i style="background:var(--rec)"></i>Récupération &nbsp; <i style="background:#d31b32"></i>Adresse à vérifier (épinglée à l’agence) &nbsp; <a href="#" data-agence="1" style="color:#d31b32">📍 placer l’agence</a><span id="leg2" style="display:none"> &nbsp;·&nbsp; plein = jour choisi, contour = lendemain</span>'; return d; };
   legend.addTo(map);
   const markerLayer = L.layerGroup().addTo(map);
+  // ---------- agence (point de repli des adresses introuvables) ----------
+  const AGENCE_KEY = '__agence__';
+  const agence = () => (typeof manualOf === 'function' && manualOf(AGENCE_KEY)) || null;
+  let agenceMarker = null;
+  function drawAgence() {
+    if (agenceMarker) { map.removeLayer(agenceMarker); agenceMarker = null; }
+    const a = agence(); if (!a) return;
+    const icon = L.divIcon({ className: '', html: '<div class="agence-pin">AEB</div>', iconSize: [44, 26], iconAnchor: [22, 13], popupAnchor: [0, -12] });
+    agenceMarker = L.marker([a.lat, a.lon], { icon, zIndexOffset: -500, title: 'Agence AEB Bourges' })
+      .bindPopup('<div class="pop"><div class="pop-t">Agence AEB Bourges</div><div>Les adresses introuvables ou incomplètes sont épinglées ici en rouge.</div><div style="margin-top:6px"><button class="pop-move" data-agence="1">📍 Déplacer l’agence</button></div></div>')
+      .addTo(map);
+  }
 
   // ---------- état ----------
   let fileHandle = null, fileName = '', fileStamp = 0, buffer = null, sheetNames = [];
@@ -512,6 +528,7 @@
     $('#n-done').textContent = entries.filter(e => e.etat).length;
     for (const e of entries) { const k = keyOf(e); e.geo = !e.chantier && manualOf(k) ? { ...manualOf(k), prec: 'manuel' } : e.chantier ? undefined : null; }
     renderList(); renderMarkers(true);
+    if (!agence()) banner('Indiquez une fois l’emplacement de votre agence : les adresses introuvables ou incomplètes y seront épinglées en rouge.', 'Placer l’agence', placeAgence);
     await geocodeVisible(token);
   }
   // géocodage progressif, seulement pour ce qui est affiché
@@ -523,7 +540,7 @@
         const e = todo.shift(); e.busy = true;
         const g = await geocode(e.chantier); e.busy = false;
         if (token !== showToken) return;
-        e.geo = g; renderItem(e); addMarker(e);
+        e.geo = g; renderItem(e); if (shownPos(e)?.red) renderMarkers(false); else addMarker(e);
         if (++n % 4 === 0) fitAll();
       }
     };
@@ -534,11 +551,11 @@
   const keyOf = (e) => norm(e.chantier) || (e.client ? 'client:' + norm(e.client) : '');
   const idOf = (e) => `${e.d}-${e.kind}-${e.num}`;
   function geoLine(e) {
-    if (!e.chantier && !e.geo) return `<div class="geo err">Pas d’adresse dans la colonne CHANTIER<button data-place="${idOf(e)}">Placer sur la carte</button></div>`;
+    if (!e.chantier && !e.geo) return `<div class="geo red">● Pas d’adresse dans CHANTIER — épinglée à l’agence<button data-place="${idOf(e)}">Placer sur la carte</button></div>`;
     if (e.geo === undefined) return '<div class="geo wait">Recherche sur la carte…</div>';
-    if (e.geo === null) return `<div class="geo err">Adresse introuvable<button data-place="${idOf(e)}">Placer sur la carte</button></div>`;
+    if (e.geo === null) return `<div class="geo red">● Adresse introuvable — épinglée à l’agence<button data-place="${idOf(e)}">Placer sur la carte</button></div>`;
     if (e.geo.prec === 'manuel') return `<div class="geo ok">✓ Position placée à la main<button data-place="${idOf(e)}">Déplacer</button><button data-reset="${idOf(e)}" title="Oublier la position placée à la main et rechercher l’adresse à nouveau">Position auto</button></div>`;
-    if (e.geo.prec === 'approx') return `<div class="geo approx">≈ ${esc(e.geo.label)} (commune seulement)<button data-place="${idOf(e)}">Corriger</button></div>`;
+    if (e.geo.prec === 'approx') return `<div class="geo red">● Adresse incomplète (${esc(e.geo.label)}) — épinglée à l’agence<button data-place="${idOf(e)}">Placer sur la carte</button></div>`;
     return `<div class="geo ok">✓ ${esc(e.geo.label)}<button data-place="${idOf(e)}">Déplacer</button></div>`;
   }
   function itemHtml(e) {
@@ -566,27 +583,40 @@
 
   function popupHtml(e) {
     const color = e.kind === 'liv' ? 'var(--liv)' : 'var(--rec)';
-    const dest = `${e.geo.lat},${e.geo.lon}`;
+    const red = !e.geo || e.geo.prec === 'approx';
+    const dest = red ? '' : `${e.geo.lat},${e.geo.lon}`;
     return `<div class="pop"><span class="pop-k" style="background:${color}">${e.kind === 'liv' ? 'LIVRAISON' : 'RÉCUPÉRATION'} n°${e.num}</span>${days.length > 1 ? ` <span style="color:#5f6368;font-size:12px">${dayLabel(e.day)}</span>` : ''}
       <div class="pop-t">${esc(e.client || '(sans client)')}</div>
       <div>${esc(e.chantier)}</div>
       ${e.heure ? `<div>🕒 ${esc(e.heure)}</div>` : ''}${e.mat ? `<div>🔧 ${esc(e.mat)}</div>` : ''}${e.livreur ? `<div>🚚 ${esc(e.livreur)}</div>` : ''}${e.tel ? `<div>📞 ${esc(e.tel)}</div>` : ''}${e.com ? `<div>💬 ${esc(e.com)}</div>` : ''}
-      <div style="margin-top:8px;display:flex;gap:8px;align-items:center;flex-wrap:wrap"><button data-place="${idOf(e)}">📍 Déplacer ce point</button><a href="https://www.google.com/maps/dir/?api=1&destination=${dest}" target="_blank" rel="noopener">Itinéraire Google Maps ↗</a></div>
-      <div style="color:#5f6368;font-size:12px;margin-top:4px">Astuce : vous pouvez aussi faire glisser le point.</div></div>`;
+      <div style="margin-top:8px;display:flex;gap:8px;align-items:center;flex-wrap:wrap"><button data-place="${idOf(e)}">📍 ${red ? 'Placer sur la carte' : 'Déplacer ce point'}</button>${red ? '' : `<a href="https://www.google.com/maps/dir/?api=1&destination=${dest}" target="_blank" rel="noopener">Itinéraire Google Maps ↗</a>`}</div>
+      ${red ? '<div style="color:#d31b32;font-size:12px;margin-top:4px">Adresse introuvable ou incomplète : point épinglé à l’agence.</div>' : ''}</div>`;
+  }
+  // position affichée : l'adresse trouvée, sinon (introuvable / commune seulement) l'agence, en rouge
+  function shownPos(e) {
+    if (e.geo && e.geo.prec !== 'approx') return { lat: e.geo.lat, lon: e.geo.lon, red: false };
+    if (e.geo === undefined) return null;                 // recherche en cours
+    const a = agence(); if (!a) return e.geo ? { lat: e.geo.lat, lon: e.geo.lon, red: true } : null;
+    // petites positions en cercle autour de l'agence pour que les épingles ne se cachent pas
+    const reds = entries.filter(x => x !== e && x.geo !== undefined && (!x.geo || x.geo.prec === 'approx') && visible(x));
+    const i = entries.filter(x => x.geo !== undefined && (!x.geo || x.geo.prec === 'approx') && visible(x)).indexOf(e);
+    const n = reds.length + 1, ang = (2 * Math.PI * Math.max(i, 0)) / n, r = n > 1 ? 0.0028 : 0;
+    return { lat: a.lat + r * Math.sin(ang), lon: a.lon + r * 1.45 * Math.cos(ang), red: true };
   }
   function addMarker(e) {
     const old = markers.get(e); if (old) markerLayer.removeLayer(old);
-    if (!e.geo) return;
-    const icon = L.divIcon({ className: '', html: `<div class="pin ${e.etat ? 'treated' : e.kind} ${e.d === 2 ? 'd2 ' + e.kind : ''} ${e.geo.prec === 'approx' ? 'approx' : ''}"><span>${e.num}</span></div>`, iconSize: [30, 30], iconAnchor: [15, 30], popupAnchor: [0, -28] });
-    const m = L.marker([e.geo.lat, e.geo.lon], { icon, draggable: true, title: e.client }).bindPopup(popupHtml(e));
-    m.on('dragend', () => { const p = m.getLatLng(); saveManual(e, p.lat, p.lng); flash('Position enregistrée. Elle sera reprise les prochaines fois.'); });
+    const pos = shownPos(e); if (!pos) return;
+    const cls = pos.red ? `pin red` : `pin ${e.etat ? 'treated' : e.kind} ${e.d === 2 ? 'd2 ' + e.kind : ''}`;
+    const icon = L.divIcon({ className: '', html: `<div class="${cls}"><span>${e.num}</span></div>`, iconSize: [30, 30], iconAnchor: [15, 30], popupAnchor: [0, -28] });
+    // pas de glisser-déposer : on déplace uniquement avec le bouton « Déplacer ce point » (évite les déplacements involontaires)
+    const m = L.marker([pos.lat, pos.lon], { icon, title: e.client }).bindPopup(popupHtml(e));
     m.on('click', () => highlight(e));
     markers.set(e, m);
     if (visible(e)) m.addTo(markerLayer);
   }
-  function renderMarkers(reset) { markerLayer.clearLayers(); if (reset) markers = new Map(); for (const e of entries) if (e.geo) addMarker(e); }
+  function renderMarkers(reset) { markerLayer.clearLayers(); if (reset) markers = new Map(); for (const e of entries) addMarker(e); drawAgence(); }
   function fitAll() {
-    const pts = entries.filter(e => e.geo && visible(e)).map(e => [e.geo.lat, e.geo.lon]);
+    const pts = entries.filter(e => visible(e)).map(shownPos).filter(Boolean).map(p => [p.lat, p.lon]);
     if (pts.length === 1) map.setView(pts[0], 13); else if (pts.length) map.fitBounds(pts, { padding: [40, 40], maxZoom: 13 });
   }
   function highlight(e) {
@@ -618,7 +648,16 @@
     banner(`Cliquez sur la carte à l’emplacement de « ${esc(e.chantier || e.client)} ». La position sera retenue pour les prochaines fois.`, 'Annuler', stopPlacing);
   }
   function stopPlacing() { placing = null; map.getContainer().style.cursor = ''; hideBanner(); }
-  map.on('click', (ev) => { if (!placing) return; const e = placing; stopPlacing(); saveManual(e, ev.latlng.lat, ev.latlng.lng); markers.get(e)?.openPopup(); });
+  map.on('click', (ev) => {
+    if (!placing) return; const e = placing; stopPlacing();
+    if (e === 'agence') { manual[AGENCE_KEY] = { lat: ev.latlng.lat, lon: ev.latlng.lng, label: 'Agence', t: Date.now() }; store.set(LS_MANUAL, manual); sharedSaveSoon(); renderMarkers(false); flash('Agence enregistrée. Les adresses introuvables y seront épinglées.'); return; }
+    saveManual(e, ev.latlng.lat, ev.latlng.lng); markers.get(e)?.openPopup();
+  });
+  function placeAgence() {
+    placing = 'agence'; map.getContainer().style.cursor = 'crosshair'; map.closePopup(); clearTimeout(flashTimer);
+    banner('Cliquez sur la carte à l’emplacement exact de votre agence (zoomez si besoin). Elle sera retenue pour toute l’équipe.', 'Annuler', stopPlacing);
+  }
+  document.addEventListener('click', (ev) => { if (ev.target.closest('[data-agence]')) { ev.preventDefault(); placeAgence(); } });
 
   function banner(html, btn, fn) {
     const b = $('#banner'); b.innerHTML = html + (btn ? ` <button>${btn}</button>` : ` <button>OK</button>`);

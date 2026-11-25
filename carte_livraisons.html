@@ -63,6 +63,20 @@
   .pin.red span { color: #fff !important; }
   .agence-pin { background: #d31b32; color: #fff; font: 700 12px/26px Georgia, serif; text-align: center; border-radius: 6px; border: 2px solid #fff; box-shadow: 0 1px 5px rgba(0,0,0,.4); width: 44px; height: 26px; }
   .geo.red { color: #d31b32; }
+  .geo button.sais { border-color: #d31b32; color: #d31b32; font-weight: 600; }
+  .geo.approx button.sais { border-color: var(--warn); color: var(--warn); }
+  #saisie { position: absolute; inset: 0; z-index: 700; background: rgba(32,33,36,.35); display: none; place-items: start center; padding-top: 70px; }
+  #saisie .sbox { background: #fff; width: min(560px, 92%); border-radius: 12px; box-shadow: 0 10px 40px rgba(0,0,0,.25); padding: 14px 16px 12px; }
+  #saisie .shead { display: flex; justify-content: space-between; align-items: center; font-size: 15px; }
+  #saisie .shead button { border: 0; font-size: 16px; padding: 2px 8px; }
+  #saisie .st { color: var(--muted); font-size: 12.5px; margin: 2px 0 10px; }
+  #saisie-q { width: 100%; font: inherit; font-size: 15px; padding: 10px 12px; border: 2px solid var(--liv); border-radius: 8px; outline: none; }
+  #saisie-res { margin-top: 8px; max-height: 320px; overflow: auto; }
+  .sug { display: block; width: 100%; text-align: left; border: 0; border-bottom: 1px solid #f1f3f4; border-radius: 0; padding: 8px 6px; }
+  .sug:hover, .sug:focus { background: var(--liv-soft); }
+  .sug span { display: block; color: var(--muted); font-size: 12px; }
+  .sug-empty { color: var(--muted); font-size: 13px; padding: 8px 4px; }
+  #saisie .sfoot { font-size: 12px; color: var(--muted); margin-top: 8px; display: flex; justify-content: space-between; gap: 8px; align-items: center; flex-wrap: wrap; }
 
   #mapwrap { flex: 1; position: relative; }
   #map { position: absolute; inset: 0; }
@@ -129,6 +143,13 @@
   <div id="mapwrap">
     <div id="map"></div>
     <div class="banner" id="banner"></div>
+    <div id="saisie"><div class="sbox">
+      <div class="shead"><b>Saisir l’adresse</b><button id="saisie-close" title="Fermer">✕</button></div>
+      <div id="saisie-t" class="st"></div>
+      <input id="saisie-q" type="text" placeholder="Ex. 22 route du Crêton Vasselay, MBDA Le Subdray, Plaimpied…" autocomplete="off">
+      <div id="saisie-res"></div>
+      <div class="sfoot">Cliquez sur la bonne proposition : la position est retenue pour toute l’équipe. <button id="saisie-map">Placer à la main sur la carte</button></div>
+    </div></div>
     <div id="welcome">
       <div class="card">
         <h2>Carte des livraisons et récupérations</h2>
@@ -183,7 +204,7 @@
   layers['Plan IGN'].addTo(map);
   L.control.layers(layers, null, { position: 'topright' }).addTo(map);
   const legend = L.control({ position: 'bottomleft' });
-  legend.onAdd = () => { const d = L.DomUtil.create('div', 'legend'); d.innerHTML = '<i style="background:var(--liv)"></i>Livraison &nbsp; <i style="background:var(--rec)"></i>Récupération &nbsp; <i style="background:#d31b32"></i>Adresse à vérifier (épinglée à l’agence) &nbsp; <a href="#" data-agence="1" style="color:#d31b32">📍 placer l’agence</a><span id="leg2" style="display:none"> &nbsp;·&nbsp; plein = jour choisi, contour = lendemain</span>'; return d; };
+  legend.onAdd = () => { const d = L.DomUtil.create('div', 'legend'); d.innerHTML = '<i style="background:var(--liv)"></i>Livraison &nbsp; <i style="background:var(--rec)"></i>Récupération &nbsp; <i style="background:#d31b32"></i>Adresse introuvable (épinglée à l’agence) &nbsp; pointillés = centre du village &nbsp; <a href="#" data-agence="1" style="color:#d31b32">📍 placer l’agence</a><span id="leg2" style="display:none"> &nbsp;·&nbsp; plein = jour choisi, contour = lendemain</span>'; return d; };
   legend.addTo(map);
   const markerLayer = L.layerGroup().addTo(map);
   // ---------- agence (point de repli des adresses introuvables) ----------
@@ -462,7 +483,7 @@
   }
   // recherches déjà en cours (une même adresse présente deux fois n'est cherchée qu'une fois)
   const pending = new Map();
-  const LS_MISS = 'aeb-carte-geo-introuvable-v1';
+  const LS_MISS = 'aeb-carte-geo-introuvable-v2';
   const misses = store.get(LS_MISS, {});           // adresses introuvables : on ne réessaie qu'après 7 jours
   let osmChain = Promise.resolve();                // OpenStreetMap : 1 requête par seconde maximum
   const osm = (q) => { const p = osmChain.then(() => nominatim(q)); osmChain = p.catch(() => {}).then(() => sleep(1000)); return p; };
@@ -476,6 +497,45 @@
     if (!pending.has(key)) pending.set(key, doGeocode(text, key).finally(() => pending.delete(key)));
     return pending.get(key);
   }
+  // ---------- communes autour de Bourges (pour placer au moins dans le village cité) ----------
+  const LS_COMMUNES = 'aeb-carte-communes-v3';
+  let communesP = null;
+  const normC = (s) => ' ' + norm(s).replace(/['’\-]/g, ' ').replace(/[^a-z0-9 ]/g, ' ').replace(/\b(ste|sainte|st)\b/g, 'saint').replace(/\s+/g, ' ').trim() + ' ';
+  function communes() {
+    if (communesP) return communesP;
+    const cached = store.get(LS_COMMUNES, null);
+    if (cached && cached.length > 500) return (communesP = Promise.resolve(cached));
+    communesP = Promise.all(['18', '36', '58', '45', '41', '03'].map(d =>
+      fetch(`https://geo.api.gouv.fr/departements/${d}/communes?fields=nom,centre&format=json`).then(r => r.ok ? r.json() : []).catch(() => [])))
+      .then(lists => {
+        const all = [];
+        for (const l of lists) for (const c of l) if (c.centre && c.nom) {
+          const one = { nom: c.nom, lat: c.centre.coordinates[1], lon: c.centre.coordinates[0] };
+          all.push({ ...one, n: normC(c.nom) });
+          // nom court des communes composées : « Plaimpied » pour Plaimpied-Givaudins, « Les Aix » pour Les Aix-d'Angillon
+          const short = c.nom.split('-')[0];
+          if (short !== c.nom && normC(short).trim().length >= 5 && !/^(saint|sainte|st)$/i.test(short.trim())) all.push({ ...one, n: normC(short) });
+          // sans l'article : « Subdray » pour Le Subdray
+          const noArt = c.nom.replace(/^(le|la|les|l')\s*/i, '');
+          if (noArt !== c.nom && normC(noArt).trim().length >= 5) all.push({ ...one, n: normC(noArt) });
+        }
+        if (all.length > 500) store.set(LS_COMMUNES, all);
+        return all;
+      });
+    return communesP;
+  }
+  // commune dont le nom apparaît dans le texte (la plus longue, puis la plus proche de Bourges)
+  async function villageIn(text) {
+    const t = normC(text); if (t.trim().length < 3) return null;
+    let best = null;
+    for (const c of await communes()) {
+      if (c.n.trim().length < 4 || !t.includes(c.n)) continue;
+      const d = km(BOURGES, [c.lat, c.lon]); if (d > MAX_KM) continue;
+      if (!best || c.n.length > best.c.n.length || (c.n.length === best.c.n.length && d < best.d)) best = { c, d };
+    }
+    return best ? { lat: best.c.lat, lon: best.c.lon, label: best.c.nom, prec: 'approx' } : null;
+  }
+
   async function doGeocode(text, key) {
     let found = null, bestScore = -1;
     const consider = (list) => { for (const c of list) { const r = rate(text, c); if (r > bestScore) { bestScore = r; found = c; } } };
@@ -495,6 +555,10 @@
         if (found && found !== before) { const r = pack(found); geoCache[key] = r; store.set(LS_GEO, geoCache); delete misses[key]; store.set(LS_MISS, misses); refreshKey(key, r); }
         else if (!found) { misses[key] = Date.now(); store.set(LS_MISS, misses); }
       }).catch(e => { console.warn(e); if (!found && netOk) { misses[key] = Date.now(); store.set(LS_MISS, misses); } });
+    }
+    if (!found || (PREC[found.type] || 1) < 2) {
+      const v = await villageIn(text).catch(() => null);
+      if (v && (!found || norm(found.label).indexOf(norm(v.label)) < 0)) { geoCache[key] = v; store.set(LS_GEO, geoCache); return v; }
     }
     if (!found) return null;
     const res = pack(found);
@@ -551,11 +615,11 @@
   const keyOf = (e) => norm(e.chantier) || (e.client ? 'client:' + norm(e.client) : '');
   const idOf = (e) => `${e.d}-${e.kind}-${e.num}`;
   function geoLine(e) {
-    if (!e.chantier && !e.geo) return `<div class="geo red">● Pas d’adresse dans CHANTIER — épinglée à l’agence<button data-place="${idOf(e)}">Placer sur la carte</button></div>`;
+    if (!e.chantier && !e.geo) return `<div class="geo red">● Pas d’adresse dans CHANTIER — épinglée à l’agence<button class="sais" data-saisir="${idOf(e)}">✏️ Saisir l’adresse</button><button data-place="${idOf(e)}">Placer sur la carte</button></div>`;
     if (e.geo === undefined) return '<div class="geo wait">Recherche sur la carte…</div>';
-    if (e.geo === null) return `<div class="geo red">● Adresse introuvable — épinglée à l’agence<button data-place="${idOf(e)}">Placer sur la carte</button></div>`;
+    if (e.geo === null) return `<div class="geo red">● Adresse introuvable — épinglée à l’agence<button class="sais" data-saisir="${idOf(e)}">✏️ Saisir l’adresse</button><button data-place="${idOf(e)}">Placer sur la carte</button></div>`;
     if (e.geo.prec === 'manuel') return `<div class="geo ok">✓ Position placée à la main<button data-place="${idOf(e)}">Déplacer</button><button data-reset="${idOf(e)}" title="Oublier la position placée à la main et rechercher l’adresse à nouveau">Position auto</button></div>`;
-    if (e.geo.prec === 'approx') return `<div class="geo red">● Adresse incomplète (${esc(e.geo.label)}) — épinglée à l’agence<button data-place="${idOf(e)}">Placer sur la carte</button></div>`;
+    if (e.geo.prec === 'approx') return `<div class="geo approx">≈ ${esc(e.geo.label)} (placé au centre du village)<button class="sais" data-saisir="${idOf(e)}">✏️ Préciser l’adresse</button><button data-place="${idOf(e)}">Placer sur la carte</button></div>`;
     return `<div class="geo ok">✓ ${esc(e.geo.label)}<button data-place="${idOf(e)}">Déplacer</button></div>`;
   }
   function itemHtml(e) {
@@ -583,30 +647,30 @@
 
   function popupHtml(e) {
     const color = e.kind === 'liv' ? 'var(--liv)' : 'var(--rec)';
-    const red = !e.geo || e.geo.prec === 'approx';
+    const red = !e.geo;
     const dest = red ? '' : `${e.geo.lat},${e.geo.lon}`;
     return `<div class="pop"><span class="pop-k" style="background:${color}">${e.kind === 'liv' ? 'LIVRAISON' : 'RÉCUPÉRATION'} n°${e.num}</span>${days.length > 1 ? ` <span style="color:#5f6368;font-size:12px">${dayLabel(e.day)}</span>` : ''}
       <div class="pop-t">${esc(e.client || '(sans client)')}</div>
       <div>${esc(e.chantier)}</div>
       ${e.heure ? `<div>🕒 ${esc(e.heure)}</div>` : ''}${e.mat ? `<div>🔧 ${esc(e.mat)}</div>` : ''}${e.livreur ? `<div>🚚 ${esc(e.livreur)}</div>` : ''}${e.tel ? `<div>📞 ${esc(e.tel)}</div>` : ''}${e.com ? `<div>💬 ${esc(e.com)}</div>` : ''}
-      <div style="margin-top:8px;display:flex;gap:8px;align-items:center;flex-wrap:wrap"><button data-place="${idOf(e)}">📍 ${red ? 'Placer sur la carte' : 'Déplacer ce point'}</button>${red ? '' : `<a href="https://www.google.com/maps/dir/?api=1&destination=${dest}" target="_blank" rel="noopener">Itinéraire Google Maps ↗</a>`}</div>
-      ${red ? '<div style="color:#d31b32;font-size:12px;margin-top:4px">Adresse introuvable ou incomplète : point épinglé à l’agence.</div>' : ''}</div>`;
+      <div style="margin-top:8px;display:flex;gap:8px;align-items:center;flex-wrap:wrap">${red || e.geo.prec === 'approx' ? `<button class="sais" data-saisir="${idOf(e)}">✏️ Saisir l’adresse</button>` : ''}<button data-place="${idOf(e)}">📍 ${red ? 'Placer sur la carte' : 'Déplacer ce point'}</button>${red ? '' : `<a href="https://www.google.com/maps/dir/?api=1&destination=${dest}" target="_blank" rel="noopener">Itinéraire Google Maps ↗</a>`}</div>
+      ${red ? '<div style="color:#d31b32;font-size:12px;margin-top:4px">Adresse introuvable : point épinglé à l’agence.</div>' : e.geo.prec === 'approx' ? '<div style="color:#b06000;font-size:12px;margin-top:4px">Adresse incomplète : point placé au centre du village.</div>' : ''}</div>`;
   }
   // position affichée : l'adresse trouvée, sinon (introuvable / commune seulement) l'agence, en rouge
   function shownPos(e) {
-    if (e.geo && e.geo.prec !== 'approx') return { lat: e.geo.lat, lon: e.geo.lon, red: false };
+    if (e.geo) return { lat: e.geo.lat, lon: e.geo.lon, red: false, approx: e.geo.prec === 'approx' };
     if (e.geo === undefined) return null;                 // recherche en cours
-    const a = agence(); if (!a) return e.geo ? { lat: e.geo.lat, lon: e.geo.lon, red: true } : null;
+    const a = agence(); if (!a) return null;
     // petites positions en cercle autour de l'agence pour que les épingles ne se cachent pas
-    const reds = entries.filter(x => x !== e && x.geo !== undefined && (!x.geo || x.geo.prec === 'approx') && visible(x));
-    const i = entries.filter(x => x.geo !== undefined && (!x.geo || x.geo.prec === 'approx') && visible(x)).indexOf(e);
+    const reds = entries.filter(x => x !== e && x.geo === null && visible(x));
+    const i = entries.filter(x => x.geo === null && visible(x)).indexOf(e);
     const n = reds.length + 1, ang = (2 * Math.PI * Math.max(i, 0)) / n, r = n > 1 ? 0.0028 : 0;
     return { lat: a.lat + r * Math.sin(ang), lon: a.lon + r * 1.45 * Math.cos(ang), red: true };
   }
   function addMarker(e) {
     const old = markers.get(e); if (old) markerLayer.removeLayer(old);
     const pos = shownPos(e); if (!pos) return;
-    const cls = pos.red ? `pin red` : `pin ${e.etat ? 'treated' : e.kind} ${e.d === 2 ? 'd2 ' + e.kind : ''}`;
+    const cls = pos.red ? `pin red` : `pin ${e.etat ? 'treated' : e.kind} ${e.d === 2 ? 'd2 ' + e.kind : ''} ${pos.approx ? 'approx' : ''}`;
     const icon = L.divIcon({ className: '', html: `<div class="${cls}"><span>${e.num}</span></div>`, iconSize: [30, 30], iconAnchor: [15, 30], popupAnchor: [0, -28] });
     // pas de glisser-déposer : on déplace uniquement avec le bouton « Déplacer ce point » (évite les déplacements involontaires)
     const m = L.marker([pos.lat, pos.lon], { icon, title: e.client }).bindPopup(popupHtml(e));
@@ -665,6 +729,45 @@
     b.style.display = 'block';
   }
   function hideBanner() { $('#banner').style.display = 'none'; }
+
+  // ---------- saisie d'une adresse (avec suggestions) ----------
+  function openSaisie(e) {
+    const dlg = $('#saisie'); dlg.dataset.id = idOf(e);
+    $('#saisie-t').textContent = `${e.client || '(sans client)'} — ${e.chantier || 'pas d’adresse'}`;
+    const inp = $('#saisie-q'); inp.value = e.chantier || ''; $('#saisie-res').innerHTML = '';
+    dlg.style.display = 'grid'; map.closePopup(); setTimeout(() => { inp.focus(); inp.select(); }, 30);
+    if (inp.value.trim().length >= 3) suggest();
+  }
+  function closeSaisie() { $('#saisie').style.display = 'none'; }
+  let sugTimer = null, sugTok = 0, sugList = [];
+  async function suggest() {
+    const q = $('#saisie-q').value.trim(), tok = ++sugTok;
+    if (q.length < 3) { $('#saisie-res').innerHTML = '<div class="sug-empty">Tapez au moins 3 caractères (rue, lieu-dit, entreprise, village…)</div>'; return; }
+    $('#saisie-res').innerHTML = '<div class="sug-empty">Recherche…</div>';
+    const [a, p, v] = await Promise.all([geopf(q, 'address').catch(() => []), geopf(q, 'poi').catch(() => []), villageIn(q).catch(() => null)]);
+    if (tok !== sugTok) return;
+    const seen = new Set();
+    sugList = [...a, ...p.map(x => ({ ...x, label: x.label + ' (lieu)' })), ...(v ? [{ ...v, type: 'municipality', label: v.label + ' (centre du village)' }] : [])]
+      .filter(x => km(BOURGES, [x.lat, x.lon]) <= 150)
+      .filter(x => { const k = x.label; if (seen.has(k)) return false; seen.add(k); return true; })
+      .slice(0, 8);
+    $('#saisie-res').innerHTML = sugList.length ? sugList.map((x, i) => `<button class="sug" data-i="${i}"><b>${esc(x.label)}</b><span>${x.type === 'housenumber' ? 'adresse précise' : x.type === 'street' ? 'rue' : x.type === 'poi' ? 'lieu' : 'village'} · ${Math.round(km(BOURGES, [x.lat, x.lon]))} km de Bourges</span></button>`).join('')
+      : '<div class="sug-empty">Rien trouvé. Essayez autrement (ex. « rue Louis Billant Saint-Doulchard »), ou utilisez « Placer sur la carte ».</div>';
+  }
+  function chooseSug(i) {
+    const x = sugList[i], e = entries.find(y => idOf(y) === $('#saisie').dataset.id); if (!x || !e) return;
+    closeSaisie(); saveManual(e, x.lat, x.lon);
+    const key = keyOf(e); if (manual[key]) { manual[key].label = x.label; store.set(LS_MANUAL, manual); }
+    flash('Adresse enregistrée pour toute l’équipe.');
+    const m = markers.get(e); if (m) { map.setView(m.getLatLng(), 14); m.openPopup(); }
+  }
+  $('#saisie-q').addEventListener('input', () => { clearTimeout(sugTimer); sugTimer = setTimeout(suggest, 300); });
+  $('#saisie-q').addEventListener('keydown', (ev) => { if (ev.key === 'Enter') { ev.preventDefault(); if (sugList.length) chooseSug(0); else suggest(); } if (ev.key === 'Escape') closeSaisie(); });
+  $('#saisie-res').addEventListener('click', (ev) => { const b = ev.target.closest('.sug'); if (b) chooseSug(+b.dataset.i); });
+  $('#saisie-close').onclick = closeSaisie;
+  $('#saisie-map').onclick = () => { const e = entries.find(y => idOf(y) === $('#saisie').dataset.id); closeSaisie(); if (e) startPlacing(e); };
+  $('#saisie').addEventListener('click', (ev) => { if (ev.target.id === 'saisie') closeSaisie(); });
+  document.addEventListener('click', (ev) => { const b = ev.target.closest('button[data-saisir]'); if (!b) return; ev.stopPropagation(); ev.preventDefault(); const e = entries.find(y => idOf(y) === b.dataset.saisir); if (e) openSaisie(e); }, true);
 
   // ---------- événements ----------
   // bouton « Déplacer ce point » dans la bulle d'un point

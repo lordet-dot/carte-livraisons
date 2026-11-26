@@ -289,9 +289,20 @@
 
   // ---------- positions partagées (fichier carte_positions.json dans le dossier, synchronisé par OneDrive) ----------
   let sharedStamp = 0, saveTimer = null;
+  // lit carte_positions.json, plus les copies « en conflit » que OneDrive crée parfois (carte_positions-NomDuPoste.json)
   async function readShared() {
-    try { const h = await fileHandle.getFileHandle(SHARED); const f = await h.getFile(); return { data: JSON.parse(await f.text() || '{}'), stamp: f.lastModified }; }
-    catch { return { data: {}, stamp: 0 }; }
+    const data = { manuel: {}, auto: {} }; let stamp = '';
+    try {
+      for await (const [name, h] of fileHandle.entries()) {
+        if (h.kind !== 'file' || !/^carte_positions.*\.json$/i.test(name)) continue;
+        try {
+          const f = await h.getFile(); const d = JSON.parse(await f.text() || '{}');
+          stamp += name + f.lastModified + '|';
+          mergeManual(data.manuel, d.manuel); Object.assign(data.auto, d.auto || {});
+        } catch {}
+      }
+    } catch {}
+    return { data, stamp };
   }
   // fusion : pour chaque adresse, la modification la plus récente l'emporte (suppressions comprises)
   function mergeManual(into, from) {
@@ -325,7 +336,7 @@
       const auto = Object.assign({}, data.auto || {}, geoCache);
       const h = await fileHandle.getFileHandle(SHARED, { create: true });
       const w = await h.createWritable(); await w.write(JSON.stringify({ version: 1, manuel: man, auto })); await w.close();
-      sharedStamp = (await h.getFile()).lastModified;
+      sharedStamp = (await readShared()).stamp;
     } catch (e) { console.warn('positions partagées', e); }
   }
 

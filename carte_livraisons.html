@@ -258,12 +258,16 @@
   // trouve le planning dans le dossier : le classeur « planning … .xlsx » le plus récent
   async function planningFile() {
     if (!isDir()) return fileHandle.getFile();
+    // priorité au planning de l'année en cours (« planning … 2026.xlsx »), puis le plus récent
+    const year = String(new Date().getFullYear());
     let best = null;
     for await (const [name, h] of fileHandle.entries()) {
       if (h.kind !== 'file' || name.startsWith('~$') || !/\.xlsx$/i.test(name) || !/planning/i.test(name)) continue;
       const f = await h.getFile();
-      if (!best || f.lastModified > best.lastModified) best = f;
+      const sc = (name.includes(year) ? 2 : 0) + (/copie|test|sauvegarde|origine/i.test(name) ? -1 : 0);
+      if (!best || sc > best.sc || (sc === best.sc && f.lastModified > best.f.lastModified)) best = { f, sc };
     }
+    best = best && best.f;
     if (!best) throw new Error('Aucun planning (.xlsx) trouvé dans ce dossier');
     return best;
   }

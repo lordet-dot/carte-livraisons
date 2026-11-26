@@ -341,7 +341,8 @@
 
   // ---------- jours ----------
   function fillDays() {
-    const want = (location.hash.slice(1).match(/^\d{4}-\d{2}-\d{2}$/) || [])[0] || $('#day').value || todayIso();
+    // à l'ouverture : toujours aujourd'hui (l'adresse de la page ne garde plus la date) ; ensuite on garde le jour affiché
+    const want = $('#day').value || todayIso();
     $('#day').innerHTML = sheetNames.map(n => `<option value="${n}">${dayLabel(n)}</option>`).join('');
     $('#day').value = sheetNames.find(n => n >= want) || sheetNames[sheetNames.length - 1];
   }
@@ -575,7 +576,7 @@
   async function showDay(name) {
     if (!buffer || !name) return;
     const token = ++showToken;
-    store.set(LS_DAY, name); history.replaceState(null, '', '#' + name);
+    store.set(LS_DAY, name); if (location.hash) history.replaceState(null, '', location.pathname + location.search);
     // lendemain = feuille de jour suivante du planning (le lundi après un vendredi)
     const name2 = withNext ? (sheetNames[sheetNames.indexOf(name) + 1] || '') : '';
     $('#day2').classList.toggle('on', !!name2);
@@ -823,7 +824,14 @@
   }
   document.addEventListener('visibilitychange', autoRefresh);
   setInterval(autoRefresh, 60000);
-  window.addEventListener('hashchange', () => { const d = location.hash.slice(1); if (sheetNames.includes(d) && d !== $('#day').value) { $('#day').value = d; showDay(d); } });
+  // page restée ouverte : au changement de jour, on passe tout seul au nouveau jour
+  let openedOn = todayIso();
+  setInterval(() => {
+    const t = todayIso(); if (t === openedOn || !sheetNames.length) return;
+    const wasToday = $('#day').value === (sheetNames.find(n => n >= openedOn) || '');
+    openedOn = t;
+    if (wasToday) { const n = sheetNames.find(x => x >= t); if (n) { $('#day').value = n; showDay(n); } }
+  }, 60000);
 
   // ---------- démarrage ----------
   (async () => {

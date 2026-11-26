@@ -591,7 +591,8 @@
   }
 
   // ---------- affichage ----------
-  let showToken = 0, days = [], withNext = false;
+  let showToken = 0, days = [], withNext = false, autoFit = true, viewKey = '', wantScroll = null;
+  map.on('moveend', () => { if (!viewKey) return; try { const c = map.getCenter(); sessionStorage.setItem('aeb-carte-vue', JSON.stringify({ key: viewKey, c: [c.lat, c.lng], z: map.getZoom() })); } catch {} });
   async function showDay(name) {
     if (!books.length || !name || !dayBook.has(name)) return;
     showFileInfo(name);
@@ -603,6 +604,15 @@
     $('#day2').textContent = name2 ? `✓ + ${dayLabel(name2).split(' ').slice(0, 2).join(' ')}` : '+ Lendemain';
     const L2 = document.getElementById('leg2'); if (L2) L2.style.display = name2 ? '' : 'none';
     days = name2 ? [name, name2] : [name];
+    // même(s) jour(s) qu'avant (actualisation automatique, « Relire », F5) : on garde la vue de la carte et la position dans la liste
+    const vkey = days.join('+');
+    let saved = null; try { saved = JSON.parse(sessionStorage.getItem('aeb-carte-vue') || 'null'); } catch {}
+    autoFit = vkey !== viewKey && !(viewKey === '' && saved && saved.key === vkey);
+    if (viewKey === '' && !autoFit && saved) map.setView(saved.c, saved.z, { animate: false });
+    viewKey = vkey;
+    const listScroll = autoFit ? 0 : $('#list').scrollTop;
+    const openId = !autoFit && [...markers.entries()].find(([, m]) => m.isPopupOpen && m.isPopupOpen())?.[0];
+    const openKey = openId ? idOf(openId) : null;
     entries = [];
     days.forEach((dn, k) => {
       const list = readDay(dn);
@@ -615,8 +625,12 @@
     $('#n-liv').textContent = entries.filter(e => e.kind === 'liv' && !e.etat).length;
     $('#n-rec').textContent = entries.filter(e => e.kind === 'rec' && !e.etat).length;
     $('#n-done').textContent = entries.filter(e => e.etat).length;
-    for (const e of entries) { const k = keyOf(e); e.geo = !e.chantier && manualOf(k) ? { ...manualOf(k), prec: 'manuel' } : e.chantier ? undefined : null; }
+    // positions déjà connues posées tout de suite (pas d'attente, la liste garde sa hauteur)
+    const known = (t) => { const k = norm(t); if (manualOf(k)) return { ...manualOf(k), prec: 'manuel' }; if (geoCache[k]) return geoCache[k]; if (misses[k] && Date.now() - misses[k] < 7 * 864e5) return null; return undefined; };
+    for (const e of entries) { const k = keyOf(e); e.geo = !e.chantier && manualOf(k) ? { ...manualOf(k), prec: 'manuel' } : e.chantier ? known(e.chantier) : null; }
     renderList(); renderMarkers(true);
+    if (!autoFit) { $('#list').scrollTop = listScroll; wantScroll = listScroll; }
+    if (openKey) setTimeout(() => { const e = entries.find(x => idOf(x) === openKey); const m = e && markers.get(e); if (m && m.getPopup()) { m.getPopup().options.autoPan = false; m.openPopup(); m.getPopup().options.autoPan = true; } }, 400);
     if (!agence()) banner('Indiquez une fois l’emplacement de votre agence : les adresses introuvables ou incomplètes y seront épinglées en rouge.', 'Placer l’agence', placeAgence);
     await geocodeVisible(token);
   }
@@ -630,11 +644,11 @@
         const g = await geocode(e.chantier); e.busy = false;
         if (token !== showToken) return;
         e.geo = g; renderItem(e); if (shownPos(e)?.red) renderMarkers(false); else addMarker(e);
-        if (++n % 4 === 0) fitAll();
+        if (++n % 4 === 0 && autoFit) fitAll();
       }
     };
     await Promise.all(Array.from({ length: 6 }, worker));   // 6 adresses cherchées en parallèle
-    if (token === showToken) { fitAll(); sharedSaveSoon(); }
+    if (token === showToken) { if (autoFit) fitAll(); else if (wantScroll != null) $('#list').scrollTop = wantScroll; wantScroll = null; sharedSaveSoon(); }
   }
 
   const keyOf = (e) => norm(e.chantier) || (e.client ? 'client:' + norm(e.client) : '');

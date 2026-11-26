@@ -225,7 +225,7 @@
   }
 
   // ---------- état ----------
-  let fileHandle = null, fileName = '', fileStamp = 0, buffer = null, sheetNames = [];
+  let fileHandle = null, fileStamp = '', books = [], dayBook = new Map(), sheetNames = [];
   let entries = [], markers = new Map(), placing = null;
   const show = { liv: true, rec: true, done: false };
   const visible = (e) => show[e.kind] && (show.done || !e.etat);
@@ -256,21 +256,19 @@
     } catch (e) { hideBanner(); if (e.name !== 'AbortError') banner('Impossible d’ouvrir : ' + e.message); }
   }
   // trouve le planning dans le dossier : le classeur « planning … .xlsx » le plus récent
-  async function planningFile() {
-    if (!isDir()) return fileHandle.getFile();
-    // priorité au planning de l'année en cours (« planning … 2026.xlsx »), puis le plus récent
-    const year = String(new Date().getFullYear());
-    let best = null;
+  // tous les plannings du dossier (« planning … 2026.xlsx », « Planning … 2027.xlsx »…), sans les copies / tests / sauvegardes
+  async function planningFiles() {
+    if (!isDir()) return [await fileHandle.getFile()];
+    const out = [];
     for await (const [name, h] of fileHandle.entries()) {
       if (h.kind !== 'file' || name.startsWith('~$') || !/\.xlsx$/i.test(name) || !/planning/i.test(name)) continue;
-      const f = await h.getFile();
-      const sc = (name.includes(year) ? 2 : 0) + (/copie|test|sauvegarde|origine/i.test(name) ? -1 : 0);
-      if (!best || sc > best.sc || (sc === best.sc && f.lastModified > best.f.lastModified)) best = { f, sc };
+      if (/copie|test|sauvegarde|origine|ancien/i.test(name)) continue;
+      out.push(await h.getFile());
     }
-    best = best && best.f;
-    if (!best) throw new Error('Aucun planning (.xlsx) trouvé dans ce dossier');
-    return best;
+    if (!out.length) throw new Error('Aucun planning (.xlsx) trouvé dans ce dossier');
+    return out;
   }
+  const sigOf = (files) => files.map(f => f.name + ':' + f.lastModified).sort().join('|');
   async function readHandle(userGesture) {
     if (!fileHandle) return false;
     let perm = await fileHandle.queryPermission({ mode: permMode() });
@@ -278,9 +276,9 @@
     if (perm !== 'granted') return false;
     try {
       await sharedLoad();
-      const f = await planningFile();
-      if (f.lastModified === fileStamp && buffer) return true;
-      await loadFile(f);
+      const files = await planningFiles();
+      if (sigOf(files) === fileStamp && books.length) return true;
+      await loadFiles(files);
       return true;
     } catch (e) {
       console.warn(e);
@@ -331,19 +329,36 @@
     } catch (e) { console.warn('positions partagées', e); }
   }
 
-  async function loadFile(f) {
-    buffer = await f.arrayBuffer(); fileName = f.name; fileStamp = f.lastModified;
-    const wb = XLSX.read(buffer, { type: 'array', bookSheets: true });
-    sheetNames = wb.SheetNames.filter(n => /^\d{4}-\d{2}-\d{2}$/.test(n)).sort();
-    if (!sheetNames.length) { banner('Ce fichier ne contient pas de feuilles de jour (AAAA-MM-JJ).'); return; }
+  async function loadFile(f) { return loadFiles([f]); }
+  async function loadFiles(files) {
+    const prev = new Map(books.map(b => [b.name, b]));
+    books = [];
+    for (const f of files) {
+      const old = prev.get(f.name);
+      if (old && old.stamp === f.lastModified) { books.push(old); continue; }
+      const buf = await f.arrayBuffer();
+      const days = XLSX.read(buf, { type: 'array', bookSheets: true }).SheetNames.filter(n => /^\d{4}-\d{2}-\d{2}$/.test(n));
+      books.push({ name: f.name, stamp: f.lastModified, buf, days });
+    }
+    fileStamp = sigOf(files);
+    // chaque jour est lu dans le planning de son année (sinon le plus récent qui le contient)
+    dayBook = new Map();
+    for (const b of [...books].sort((x, y) => x.stamp - y.stamp)) for (const d of b.days) {
+      const cur = dayBook.get(d);
+      if (!cur || b.name.includes(d.slice(0, 4)) || !cur.name.includes(d.slice(0, 4))) dayBook.set(d, b);
+    }
+    sheetNames = [...dayBook.keys()].sort();
+    if (!sheetNames.length) { banner('Ce dossier ne contient pas de planning avec des feuilles de jour (AAAA-MM-JJ).'); return; }
     fillDays();
     $('#welcome').style.display = 'none';
-    const t = new Date(fileStamp);
-    $('#fileinfo').innerHTML = `<b>${esc(fileName)}</b> · enregistré à ${String(t.getHours()).padStart(2, '0')}h${String(t.getMinutes()).padStart(2, '0')}`;
     await showDay($('#day').value);
   }
-
-  // ---------- jours ----------
+  function showFileInfo(day) {
+    const b = dayBook.get(day); if (!b) return;
+    const t = new Date(b.stamp), today = new Date();
+    const when = t.toDateString() === today.toDateString() ? '' : ` le ${t.getDate()}/${t.getMonth() + 1}`;
+    $('#fileinfo').innerHTML = `<b>${esc(b.name)}</b> · enregistré${when} à ${String(t.getHours()).padStart(2, '0')}h${String(t.getMinutes()).padStart(2, '0')}`;
+  }
   function fillDays() {
     // à l'ouverture : toujours aujourd'hui (l'adresse de la page ne garde plus la date) ; ensuite on garde le jour affiché
     const want = $('#day').value || todayIso();
@@ -354,7 +369,7 @@
 
   // ---------- lecture d'une feuille de jour ----------
   function readDay(name) {
-    const wb = XLSX.read(buffer, { type: 'array', sheets: [name], cellDates: true, dateNF: 'dd/mm/yyyy', cellStyles: true });
+    const wb = XLSX.read(dayBook.get(name).buf, { type: 'array', sheets: [name], cellDates: true, dateNF: 'dd/mm/yyyy', cellStyles: true });
     const ws = wb.Sheets[name];
     const rows = XLSX.utils.sheet_to_json(ws, { header: 1, raw: false, defval: '', blankrows: true });
     const cell = (r, c) => clean((rows[r] || [])[c]);
@@ -578,7 +593,8 @@
   // ---------- affichage ----------
   let showToken = 0, days = [], withNext = false;
   async function showDay(name) {
-    if (!buffer || !name) return;
+    if (!books.length || !name || !dayBook.has(name)) return;
+    showFileInfo(name);
     const token = ++showToken;
     store.set(LS_DAY, name); if (location.hash) history.replaceState(null, '', location.pathname + location.search);
     // lendemain = feuille de jour suivante du planning (le lundi après un vendredi)
@@ -824,7 +840,7 @@
   async function autoRefresh() {
     if (document.visibilityState !== 'visible' || !fileHandle) return;
     if (await fileHandle.queryPermission({ mode: permMode() }) !== 'granted') return;
-    try { await sharedLoad(); const f = await planningFile(); if (f.lastModified !== fileStamp) await loadFile(f); } catch {}
+    try { await sharedLoad(); const files = await planningFiles(); if (sigOf(files) !== fileStamp) await loadFiles(files); } catch {}
   }
   document.addEventListener('visibilitychange', autoRefresh);
   setInterval(autoRefresh, 60000);
